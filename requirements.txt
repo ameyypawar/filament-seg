@@ -1,0 +1,28 @@
+# Solar Filament Segmentation Challenge 2026
+#
+# The competition requires this file to pin every package used, so the judging
+# committee can reproduce the submission. Versions are pinned exactly.
+#
+# Tested on Python 3.11 (PyTorch does not yet publish wheels for 3.14).
+
+# --- Core: data, metrics, baseline (no GPU needed) --------------------------
+numpy==2.2.6
+pandas==2.3.3
+opencv-python-headless==4.11.0.86
+pycocotools==2.0.10
+scipy==1.15.3
+tqdm==4.67.1
+matplotlib==3.10.6
+
+# --- Tooling ----------------------------------------------------------------
+pytest==8.4.2
+kaggle==1.7.4.5
+
+# --- Model training (Phase 3+) ----------------------------------------------
+# Uncomment when moving past the baseline. On Kaggle these are preinstalled;
+# installing them locally costs ~2 GB of disk.
+# torch==2.8.0
+# torchvision==0.23.0
+# segmentation-models-pytorch==0.5.0
+# albumentations==2.0.8
+# timm==1.0.19

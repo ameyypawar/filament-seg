@@ -1,0 +1,26 @@
+# Competition data is 750 MB and CC BY-NC licensed -- never commit it.
+data/
+*.zip
+
+# Generated artefacts
+outputs/
+!outputs/.gitkeep
+*.pth
+*.ckpt
+*.csv
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ipynb_checkpoints/
+*.egg-info/
+
+# Credentials -- must never reach the public repo
+kaggle.json
+.env
+
+# macOS
+.DS_Store
