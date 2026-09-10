@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "filament-seg"
+version = "0.1.0"
+description = "Solar Filament Segmentation Challenge 2026 (IEEE Big Data Cup)"
+readme = "README.md"
+requires-python = ">=3.10,<3.14"
+license = { text = "MIT" }
+
+# Exact pins live in requirements.txt, which the competition requires. These are
+# the loose runtime bounds for an editable install.
+dependencies = [
+    "numpy>=2.0",
+    "pandas>=2.0",
+    "opencv-python-headless>=4.9",
+    "pycocotools>=2.0.7",
+    "scipy>=1.11",
+    "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "matplotlib>=3.8", "kaggle>=1.6"]
+
+[tool.setuptools]
+packages = ["filament_seg"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+    # pycocotools has not caught up with the NumPy 2 __array__ copy keyword.
+    "ignore::DeprecationWarning:pycocotools",
+]

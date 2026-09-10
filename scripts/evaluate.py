@@ -9,6 +9,12 @@ over matched pairs, and the one-to-many / many-to-one fragmentation counts.
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path as _Path
+
+# Make `python scripts/foo.py` work from a fresh clone, with no install step.
+sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
+
 import argparse
 import json
 from pathlib import Path
