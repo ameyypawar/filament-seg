@@ -63,6 +63,10 @@ source .venv/bin/activate
 uv pip install -r requirements.txt
 ```
 
+That is enough to run everything: the scripts put the repo root on `sys.path`
+themselves, so a fresh clone works with no install step. `uv pip install -e .`
+also works if you prefer importing `filament_seg` from elsewhere.
+
 Then get the data. This needs two one-time manual steps from you: accept the
 competition rules on Kaggle, and create an API token
 (Kaggle -> Settings -> API -> Create New API Token -> save to
