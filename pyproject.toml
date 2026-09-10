@@ -29,6 +29,9 @@ packages = ["filament_seg"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Put the repo root on sys.path so a bare `pytest` works, not just
+# `python -m pytest` (which adds the CWD itself).
+pythonpath = ["."]
 filterwarnings = [
     # pycocotools has not caught up with the NumPy 2 __array__ copy keyword.
     "ignore::DeprecationWarning:pycocotools",
