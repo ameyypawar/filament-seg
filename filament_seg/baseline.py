@@ -34,7 +34,9 @@ class BaselineParams:
     """Thresholding knobs. Tune ``k`` first -- it dominates the score."""
 
     #: Darkness threshold in standard deviations below the quiet-Sun level.
-    k: float = 1.6
+    #: 2.0 comes from a grid sweep over 40 validation images; PQ is fairly
+    #: flat between k=1.6 and k=2.4 but collapses above k=2.8.
+    k: float = 2.0
     #: Shrink factor applied to the disk radius; the limb itself is noisy.
     disk_shrink: float = 0.96
     #: Gaussian smoothing (in pixels) applied before thresholding.
