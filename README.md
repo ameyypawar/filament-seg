@@ -167,6 +167,28 @@ answer, and it is now measured rather than assumed. The baseline has done its
 job: the RLE encoding, CSV format, splits and evaluator are all proven end to
 end, and there is a real floor to beat.
 
+### Local vs leaderboard calibration
+
+The tuned baseline scores **0.08 on the public leaderboard** against **0.1245
+local pooled / 0.1093 local per-image** on the full validation split. Chasing
+that gap:
+
+* **Not annotator choice.** Scoring against every annotator instead of one per
+  observation moves PQ from 0.1245 to 0.1231. Ruled out.
+* **Not distribution shift.** Train and test match closely on observatory
+  (within 4 points on every site) and on year. Predicted instances per image are
+  1638/144 = 11.38 on validation against 2052/180 = 11.40 on test.
+* **Not tuning overfit.** `k=2.0` was chosen on a 40-image subsample scoring
+  0.129; the full 144-image validation split gives 0.1245. Barely optimistic.
+* **Partly sampling noise.** The public leaderboard uses roughly half the 180
+  test images. Per-image PQ has std 0.097, so a 90-image slice has a standard
+  error of about 0.010, putting 0.08 some 2.4 to 2.9 standard errors below the
+  local mean. Real, but not the whole story either.
+
+Working rule until a second submission says otherwise: **treat local per-image
+PQ as optimistic by roughly 25%**. What matters is not the absolute offset but
+whether local gains track leaderboard gains, which the next submission tests.
+
 ## Plan
 
 - **Phase 1 — plumbing.** Local PQ evaluator, leak-free splits, model-free
@@ -186,10 +208,10 @@ end, and there is a real floor to beat.
 
 ## Open questions
 
-- Is leaderboard PQ pooled over the test set or averaged per image? The two
-  differ by only 0.005 on the baseline (0.097 vs 0.093), so the first submission
-  will not separate them. It will take a prediction that is deliberately good on
-  crowded images and bad on sparse ones to tell them apart.
+- Is leaderboard PQ pooled over the test set or averaged per image? The
+  baseline's public score is 0.08 against local pooled 0.1245 and local
+  per-image 0.1093. Per-image is the closer of the two, but neither matches, so
+  this is still open (see the calibration note below).
 - Does the held-out ground truth use one annotator per observation, or a
   consensus? Given inter-annotator PQ of 0.34, this materially changes what a
   leaderboard score means.
