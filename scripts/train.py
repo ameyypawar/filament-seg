@@ -161,7 +161,8 @@ def main() -> None:
         model.train()
         running_loss, n_seen = 0.0, 0
         start = time.perf_counter()
-        for x, y in loader:
+        n_batches = len(loader)
+        for step, (x, y) in enumerate(loader, start=1):
             x = x.to(device, non_blocking=True)
             y = y.to(device, non_blocking=True)
             optimizer.zero_grad(set_to_none=True)
@@ -181,6 +182,16 @@ def main() -> None:
 
             running_loss += loss.item() * x.size(0)
             n_seen += x.size(0)
+
+            # Without this an epoch is a silent multi-minute block, and a
+            # stalled run looks exactly like a slow one.
+            if step % 25 == 0 or step == n_batches:
+                rate = n_seen / (time.perf_counter() - start)
+                print(
+                    f"  epoch {epoch} step {step}/{n_batches} "
+                    f"loss={running_loss / n_seen:.4f} {rate:.1f} crops/s",
+                    flush=True,
+                )
         scheduler.step()
         train_loss = running_loss / max(n_seen, 1)
 
@@ -191,21 +202,27 @@ def main() -> None:
         val_pq = val_summary.get("pq_pooled", 0.0)
         elapsed = time.perf_counter() - start
 
+        payload = {
+            "model": model.state_dict(),
+            "encoder": args.encoder,
+            "in_channels": 2,
+            "crop_size": args.crop_size,
+            "target": args.target,
+            "epoch": epoch,
+            "val_pq": val_pq,
+        }
+
+        # Validation runs on --limit-val observations (24 by default), where
+        # per-image PQ carries a standard error near 0.02. Keeping only the
+        # best checkpoint lets one lucky epoch permanently displace a
+        # genuinely better one, so the latest epoch is kept alongside it and
+        # both can be scored on the full validation split afterwards.
+        torch.save(payload, out_path.with_name(out_path.stem + "_last.pt"))
+
         improved = val_pq > best_pq
         if improved:
             best_pq = val_pq
-            torch.save(
-                {
-                    "model": model.state_dict(),
-                    "encoder": args.encoder,
-                    "in_channels": 2,
-                    "crop_size": args.crop_size,
-                    "target": args.target,
-                    "epoch": epoch,
-                    "val_pq": val_pq,
-                },
-                out_path,
-            )
+            torch.save(payload, out_path)
 
         print(
             f"epoch {epoch}/{args.epochs}  train_loss={train_loss:.4f}  "
