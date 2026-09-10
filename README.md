@@ -111,10 +111,66 @@ array produces a transposed mask that encodes and decodes cleanly and scores
 near zero. `rle.mask_to_rle` handles this; `tests/test_metrics.py` guards it
 with a deliberately asymmetric mask.
 
+## What the data actually says
+
+Measured with the scripts above, not assumed.
+
+| | |
+|---|---|
+| Observations / annotated views | 707 / 1154 (411 with one annotator, 145 with two, 151 with three) |
+| Filaments | 8,199 — mean 7.1 per view, max 26, none empty |
+| Coverage | 2011-01-09 to 2022-08-03, 656 distinct days, 6 GONG sites, evenly spread |
+| Test set | 180 images |
+| Median filament area | 1,228 px — about 0.03% of a 2048x2048 frame |
+| Filaments under 1,000 px | 41% |
+
+**Filaments are tiny and thin.** A median filament is roughly 0.03% of the
+image. For a structure a handful of pixels wide, clearing IoU 0.5 means being
+right to within a pixel or two along each edge. This is the single fact that
+explains every score in this competition.
+
+**Inter-annotator PQ is 0.343** (mean over the 296 observations annotated by
+more than one person; median 0.345, range 0.00 to 0.75). Two experts shown the
+same Sun agree with each other at PQ 0.34. The organisers' remark that "any PQ
+score of greater than 0.35 is of great value to us" lands exactly on that
+number, which is unlikely to be a coincidence.
+
+Careful with what this does and does not imply. It is **not** a hard ceiling on
+a model's score: a model that learns the *consensus* annotation will score
+higher against any single annotator than a second annotator does, because it
+regresses toward the middle of the label distribution. That is the honest reason
+the leaderboard's main cluster sits at 0.38-0.40, above human pairwise
+agreement, and it is why consensus targets are Phase 4 work rather than a
+curiosity. What it does mean is that beyond roughly 0.40 the remaining signal is
+substantially annotator preference, and effort is better spent on the 30%
+qualitative half of the rubric than on chasing decimals.
+
+### Baseline results
+
+The model-free detector, tuned by `scripts/sweep_baseline.py` over 40 validation
+images (`k=2.0`, `min_area=400`):
+
+| | PQ | SQ | RQ | TP | FP | FN |
+|---|---|---|---|---|---|---|
+| default `k=1.6` | 0.097 | 0.634 | 0.154 | 316 | 2655 | 826 |
+| tuned `k=2.0` | 0.129 | 0.645 | 0.200 | — | — | — |
+
+The split between SQ and RQ is the whole story. **SQ sits at ~0.65 no matter
+what you tune** — when the detector does match a filament, the mask is
+reasonable. **RQ never exceeds 0.20** — it almost never matches at all. Across
+the entire sweep, from 22% to 289% of the true filament count predicted, at best
+79 of 263 ground-truth filaments were ever recovered.
+
+So intensity thresholding cannot delineate these structures precisely enough to
+clear IoU 0.5, and no amount of threshold tuning fixes it. That is the expected
+answer, and it is now measured rather than assumed. The baseline has done its
+job: the RLE encoding, CSV format, splits and evaluator are all proven end to
+end, and there is a real floor to beat.
+
 ## Plan
 
 - **Phase 1 — plumbing.** Local PQ evaluator, leak-free splits, model-free
-  baseline, a real submission on the leaderboard. *(this repo)*
+  baseline, a real submission on the leaderboard. *(done)*
 - **Phase 2 — preprocessing.** Disk masking and limb-darkening correction, both
   already in `disk.py`; then decide resolution (1024 full-disk for context vs
   512 overlapping tiles for barbs).
@@ -130,12 +186,16 @@ with a deliberately asymmetric mask.
 
 ## Open questions
 
-- Is leaderboard PQ pooled over the test set or averaged per image? Calibrate
-  from the first submission.
-- Does the held-out ground truth use one annotator per observation or several?
-- What does `scripts/annotator_agreement.py` report? If human agreement is near
-  0.55, the leaderboard is already at the ceiling and the remaining points live
-  in the qualitative half of the rubric.
+- Is leaderboard PQ pooled over the test set or averaged per image? The two
+  differ by only 0.005 on the baseline (0.097 vs 0.093), so the first submission
+  will not separate them. It will take a prediction that is deliberately good on
+  crowded images and bad on sparse ones to tell them apart.
+- Does the held-out ground truth use one annotator per observation, or a
+  consensus? Given inter-annotator PQ of 0.34, this materially changes what a
+  leaderboard score means.
+- How does the leaderboard's 0.55 cluster exist when human pairwise agreement is
+  0.34? Consensus ground truth would explain part of it; the organisers'
+  Aug 20 note about metric gaming suggests it does not explain all of it.
 
 ## Data licence
 
