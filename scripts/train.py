@@ -103,6 +103,13 @@ def main() -> None:
     parser.add_argument("--annotations", default=str(TRAIN_ANNOTATIONS))
     parser.add_argument("--cache-dir", default=str(DEFAULT_CACHE_DIR))
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--target",
+        choices=["annotator", "consensus"],
+        default="annotator",
+        help="'consensus' trains against the per-stem soft-agreement mask instead of "
+        "one annotator's view -- see filament_seg.dataset.FilamentCrops",
+    )
     args = parser.parse_args()
 
     device = select_device()
@@ -127,6 +134,7 @@ def main() -> None:
         crops_per_image=args.crops_per_image,
         augment=True,
         seed=args.seed,
+        target=args.target,
     )
     loader = DataLoader(
         dataset,
@@ -192,6 +200,7 @@ def main() -> None:
                     "encoder": args.encoder,
                     "in_channels": 2,
                     "crop_size": args.crop_size,
+                    "target": args.target,
                     "epoch": epoch,
                     "val_pq": val_pq,
                 },

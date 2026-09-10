@@ -35,7 +35,7 @@ import torch
 from pycocotools import mask as mask_utils
 from torch.utils.data import Dataset
 
-from .data import Annotations
+from .data import Annotations, deduplicate_by_file
 from .disk import Disk
 
 #: Flips and 90-degree rotations preserve every pixel exactly (no
@@ -112,7 +112,18 @@ class _BoundedCache:
 
 
 class FilamentCrops(Dataset):
-    """Random crops from cached flattened images, biased toward filaments."""
+    """Random crops from cached flattened images, biased toward filaments.
+
+    ``target="annotator"`` (the default) trains against whichever single
+    annotator's view was selected -- the original behaviour. ``target=
+    "consensus"`` trains against ``scripts/preprocess.py``'s per-stem soft
+    consensus mask instead: MAGFiLO's measured inter-annotator Panoptic
+    Quality is only 0.343, so one annotator's view carries a lot of
+    annotator-specific noise that a consensus average regresses out. The
+    consensus mask is keyed by observation stem, not by view, so under this
+    target ``image_ids`` is deduplicated to one view per stem -- the target
+    no longer depends on which view was picked, only the crop geometry does.
+    """
 
     def __init__(
         self,
@@ -124,8 +135,11 @@ class FilamentCrops(Dataset):
         filament_bias: float = 0.7,
         augment: bool = True,
         seed: int = 0,
+        target: str = "annotator",
     ) -> None:
-        self.image_ids = list(image_ids)
+        if target not in ("annotator", "consensus"):
+            raise ValueError(f"unknown target: {target!r}")
+
         self.annotations = annotations
         self.cache_dir = Path(cache_dir)
         self.crop_size = crop_size
@@ -133,9 +147,16 @@ class FilamentCrops(Dataset):
         self.filament_bias = filament_bias
         self.augment = augment
         self.seed = seed
+        self.target = target
+
+        image_ids = list(image_ids)
+        if target == "consensus":
+            image_ids = deduplicate_by_file(annotations, image_ids, seed=seed)
+        self.image_ids = image_ids
 
         self._flat_dir = self.cache_dir / "flat"
         self._mask_dir = self.cache_dir / "mask"
+        self._consensus_dir = self.cache_dir / "consensus"
         self._disk = load_disk_geometry(self.cache_dir / "disk.json")
         self._centroids: dict[str, list[tuple[float, float]]] = {
             image_id: _instance_centroids(annotations, image_id) for image_id in self.image_ids
@@ -161,9 +182,9 @@ class FilamentCrops(Dataset):
 
         flat_crop = entry.flat_u8[y0 : y0 + size, x0 : x0 + size].astype(np.float32) / 255.0
         radius_crop = entry.radius[y0 : y0 + size, x0 : x0 + size]
-        mask_crop = self._load_mask(image_id, shape)[y0 : y0 + size, x0 : x0 + size].astype(
-            np.float32
-        )
+        mask_crop = self._load_mask(image_id, stem, shape)[
+            y0 : y0 + size, x0 : x0 + size
+        ].astype(np.float32)
 
         if self.augment:
             out = _AUGMENT(image=flat_crop, mask=mask_crop, radius=radius_crop)
@@ -207,7 +228,19 @@ class FilamentCrops(Dataset):
         self._cache.put(stem, entry)
         return entry
 
-    def _load_mask(self, image_id: str, shape: tuple[int, int]) -> np.ndarray:
+    def _load_mask(self, image_id: str, stem: str, shape: tuple[int, int]) -> np.ndarray:
+        if self.target == "consensus":
+            consensus_path = self._consensus_dir / f"{stem}.png"
+            mask = cv2.imread(str(consensus_path), cv2.IMREAD_GRAYSCALE)
+            if mask is None:
+                raise FileNotFoundError(
+                    f"missing cached consensus mask: {consensus_path} -- "
+                    "run scripts/preprocess.py first"
+                )
+            # Soft agreement fraction, not thresholded -- 255 means every
+            # annotator of this stem agreed, not just a majority.
+            return mask.astype(np.float32) / 255.0
+
         mask_path = self._mask_dir / f"{image_id}.png"
         mask = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
         if mask is None:
