@@ -1,0 +1,13 @@
+{
+  "id": "ameypawar123456789/filament-seg-train",
+  "title": "filament-seg-train",
+  "code_file": "train_on_kaggle.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_internet": true,
+  "dataset_sources": [],
+  "competition_sources": ["filament-segmentation-2026"],
+  "kernel_sources": []
+}
