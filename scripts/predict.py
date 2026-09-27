@@ -69,6 +69,11 @@ def main() -> None:
     parser.add_argument("--threshold", type=float, default=0.5)
     parser.add_argument("--min-area", type=int, default=400)
     parser.add_argument("--bridge-gap", type=int, default=12)
+    # sweep_postprocess.py tunes these two as well; without them here, whatever
+    # it found could not be applied to the submission.
+    parser.add_argument("--open-radius", type=int, default=2)
+    parser.add_argument("--close-radius", type=int, default=5)
+    parser.add_argument("--limit", type=int, default=0, help="debug: first N observations")
     parser.add_argument("--out", default=None)
     parser.add_argument("--annotations", default=str(TRAIN_ANNOTATIONS))
     parser.add_argument("--split", default=str(SPLIT_PATH))
@@ -92,13 +97,21 @@ def main() -> None:
     flat_dir = cache_dir / "flat"
 
     stems = resolve_stems(args)
+    if args.limit:
+        stems = stems[: args.limit]
     if not stems:
         raise SystemExit(
             "no observations found for this subset -- has scripts/preprocess.py run?"
         )
     print(f"predicting {len(stems)} {args.subset} observations")
 
-    postprocess_params = PostprocessParams(min_area=args.min_area, bridge_gap=args.bridge_gap)
+    postprocess_params = PostprocessParams(
+        min_area=args.min_area,
+        bridge_gap=args.bridge_gap,
+        open_radius=args.open_radius,
+        close_radius=args.close_radius,
+    )
+    print(f"post-processing: threshold={args.threshold} {postprocess_params}")
     threshold_logit = _logit(args.threshold)
 
     predictions: dict[str, list] = {}
