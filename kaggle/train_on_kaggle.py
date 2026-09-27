@@ -109,6 +109,44 @@ def find_data_root() -> Path:
                      "is the competition attached to this notebook?")
 
 
+def environment_report() -> dict:
+    """What this session actually got, logged before any decision is made on it.
+
+    "No GPU" has two very different causes -- no accelerator assigned at all
+    (typically an account that isn't phone-verified, or no GPU quota left), or a
+    GPU that is present but too old for the installed PyTorch build -- and a bare
+    "no GPU" message cannot tell them apart. Environment variables whose names
+    suggest credentials are never printed.
+    """
+    import torch
+    import urllib.request
+
+    report: dict = {"torch": torch.__version__, "torch_cuda_build": torch.version.cuda,
+                    "cuda_available": torch.cuda.is_available(),
+                    "device_count": torch.cuda.device_count()}
+    smi = shutil.which("nvidia-smi")
+    report["nvidia_smi"] = (subprocess.run([smi, "-L"], capture_output=True, text=True)
+                            .stdout.strip() or "present, lists no devices") if smi else "not installed"
+    if torch.cuda.device_count():
+        major, minor = torch.cuda.get_device_capability(0)
+        report["device_capability"] = f"sm_{major}{minor}"
+        report["torch_arch_list"] = torch.cuda.get_arch_list()
+    secret = ("TOKEN", "SECRET", "KEY", "PASS", "CRED", "AUTH")
+    report["accelerator_env"] = {
+        k: v for k, v in os.environ.items()
+        if any(s in k for s in ("GPU", "ACCELERATOR", "CUDA", "NVIDIA"))
+        and not any(s in k for s in secret)
+    }
+    try:
+        urllib.request.urlopen("https://github.com", timeout=10)
+        report["internet"] = "ok"
+    except Exception as error:  # noqa: BLE001
+        report["internet"] = f"unavailable ({error.__class__.__name__})"
+    for key, value in report.items():
+        log(f"env | {key}: {value}")
+    return report
+
+
 def write_summary(**extra) -> None:
     (KEEP / "run_summary.json").write_text(
         json.dumps({"stages": STATUS, **extra}, indent=2, default=str), encoding="utf-8")
@@ -120,8 +158,15 @@ def main() -> None:
 
     # --- fail fast on anything that would waste a long run --------------------
     import torch
+    report = environment_report()
+    write_summary(environment=report)
     if not torch.cuda.is_available():
-        raise SystemExit("no GPU in this session; refusing to train for hours on CPU")
+        cause = ("a GPU is present but this PyTorch build cannot use it"
+                 if "GPU" in str(report["nvidia_smi"]) else
+                 "no GPU was assigned to this session")
+        raise SystemExit(f"no usable GPU: {cause}; refusing to train for hours on CPU")
+    if report["internet"] != "ok":
+        raise SystemExit("no internet in this session, so the repository cannot be cloned")
     gpu = torch.cuda.get_device_name(0)
     log(f"GPU: {gpu} | torch {torch.__version__} | CPUs: {os.cpu_count()}")
 
