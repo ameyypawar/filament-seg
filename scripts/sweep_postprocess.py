@@ -50,7 +50,7 @@ from filament_seg.data import deduplicate_by_file, load_annotations
 from filament_seg.dataset import load_disk_geometry
 from filament_seg.disk import Disk
 from filament_seg.metrics import evaluate_image
-from filament_seg.model import build_model, tiled_predict
+from filament_seg.model import TTA_MODES, build_model, tiled_predict_tta
 from filament_seg.postprocess import PostprocessParams, binary_to_instances
 from filament_seg.rle import Rle, labels_to_rles
 
@@ -74,6 +74,35 @@ def _cache_path(out_dir: Path, stem: str) -> Path:
     return out_dir / f"{stem}.npy"
 
 
+def _check_cache_provenance(out_dir: Path, checkpoint_path: str, tta: str, force: bool) -> None:
+    """Refuse to reuse cached logits produced by a different model or TTA mode.
+
+    The cache is keyed by observation name alone, so without this a sweep run
+    against a new checkpoint -- or with test-time augmentation switched on --
+    would silently reuse stale logits and tune against the wrong predictions.
+    """
+    checkpoint = Path(checkpoint_path).resolve()
+    stat = checkpoint.stat()
+    wanted = {"checkpoint": str(checkpoint), "size": stat.st_size,
+              "mtime": int(stat.st_mtime), "tta": tta}
+    meta_path = out_dir / "cache_meta.json"
+    if meta_path.exists() and not force:
+        found = json.loads(meta_path.read_text(encoding="utf-8"))
+        if found != wanted:
+            raise SystemExit(
+                f"{out_dir} holds logits from a different model or TTA mode:\n"
+                f"  cached: {found}\n  wanted: {wanted}\n"
+                "use a different --out-dir, or --force to recompute"
+            )
+    elif any(out_dir.glob("*.npy")) and not force:
+        raise SystemExit(
+            f"{out_dir} holds cached logits with no record of which model made them; "
+            "use a different --out-dir, or --force to recompute"
+        )
+    out_dir.mkdir(parents=True, exist_ok=True)
+    meta_path.write_text(json.dumps(wanted, indent=2), encoding="utf-8")
+
+
 def ensure_logits(
     payloads: list[tuple[str, str]],
     checkpoint_path: str,
@@ -84,9 +113,11 @@ def ensure_logits(
     overlap: int,
     device: torch.device,
     force: bool,
+    tta: str = "none",
 ) -> None:
     """Cache ``tiled_predict``'s full-resolution logits for every stem, once."""
     out_dir.mkdir(parents=True, exist_ok=True)
+    _check_cache_provenance(out_dir, checkpoint_path, tta, force)
     stems = sorted({stem for _, stem in payloads})
     pending = [s for s in stems if force or not _cache_path(out_dir, s).exists()]
     if not pending:
@@ -112,7 +143,7 @@ def ensure_logits(
         disk = disk_geometry[stem]
         radius = disk.radius_map(flat_u8.shape).astype(np.float32)
         x = np.stack([flat_u8.astype(np.float32) / 255.0, radius], axis=0)
-        logits = tiled_predict(model, x, tile=tile, overlap=overlap, device=device)
+        logits = tiled_predict_tta(model, x, tta=tta, tile=tile, overlap=overlap, device=device)
         np.save(_cache_path(out_dir, stem), logits.astype(np.float16))
         if n % 5 == 0 or n == len(pending):
             print(f"  {n}/{len(pending)}", flush=True)
@@ -160,7 +191,10 @@ def main() -> None:
     parser.add_argument("--annotations", default=str(TRAIN_ANNOTATIONS))
     parser.add_argument("--split", default=str(SPLIT_PATH))
     parser.add_argument("--cache-dir", default=str(DEFAULT_CACHE_DIR))
-    parser.add_argument("--out-dir", default=str(OUTPUT_ROOT / "val_logits"))
+    parser.add_argument("--out-dir", default=None,
+                        help="logit cache; defaults to outputs/val_logits_<tta mode>")
+    parser.add_argument("--tta", choices=list(TTA_MODES), default="none",
+                        help="average logits over flipped/rotated copies of each image")
     parser.add_argument("--n-images", type=int, default=24)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--tile", type=int, default=512)
@@ -193,7 +227,7 @@ def main() -> None:
     cache_dir = Path(args.cache_dir)
     disk_geometry = load_disk_geometry(cache_dir / "disk.json")
     flat_dir = cache_dir / "flat"
-    out_dir = Path(args.out_dir)
+    out_dir = Path(args.out_dir or (OUTPUT_ROOT / f"val_logits_{args.tta}"))
 
     payloads: list[tuple[str, str]] = []
     gt: dict[str, list[Rle]] = {}
@@ -207,7 +241,7 @@ def main() -> None:
 
     ensure_logits(
         payloads, args.checkpoint, disk_geometry, flat_dir, out_dir,
-        args.tile, args.overlap, device, args.force,
+        args.tile, args.overlap, device, args.force, tta=args.tta,
     )
 
     grid = [

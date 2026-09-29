@@ -137,3 +137,64 @@ def tiled_predict(
 
     weight_sum[weight_sum == 0] = 1.0
     return logits_sum / weight_sum
+
+
+#: Test-time augmentation: which orientations to average over, each written as
+#: (flip left-right, flip up-down, transpose). Training augmented with flips and
+#: 90-degree rotations, so the model has seen all eight orientations of a square
+#: image ("dihedral"); "flips" is the cheaper half of them.
+TTA_MODES: dict[str, list[tuple[bool, bool, bool]]] = {
+    "none": [(False, False, False)],
+    "flips": [(False, False, False), (True, False, False),
+              (False, True, False), (True, True, False)],
+    "dihedral": [(flip_lr, flip_ud, transpose)
+                 for transpose in (False, True)
+                 for flip_lr in (False, True)
+                 for flip_ud in (False, True)],
+}
+
+
+def _orient(a: np.ndarray, flip_lr: bool, flip_ud: bool, transpose: bool) -> np.ndarray:
+    """Apply one orientation to the last two (spatial) axes."""
+    if transpose:
+        a = np.swapaxes(a, -1, -2)
+    if flip_lr:
+        a = a[..., :, ::-1]
+    if flip_ud:
+        a = a[..., ::-1, :]
+    return np.ascontiguousarray(a)
+
+
+def _unorient(a: np.ndarray, flip_lr: bool, flip_ud: bool, transpose: bool) -> np.ndarray:
+    """Undo :func:`_orient` on a 2-D map -- the same steps, in reverse order."""
+    if flip_ud:
+        a = a[::-1, :]
+    if flip_lr:
+        a = a[:, ::-1]
+    if transpose:
+        a = a.T
+    return a
+
+
+@torch.no_grad()
+def tiled_predict_tta(
+    model: nn.Module, x: np.ndarray, tta: str = "none", **tiled_kwargs
+) -> np.ndarray:
+    """``tiled_predict`` averaged over mirrored and rotated copies of the image.
+
+    Each copy is predicted, turned back to the original orientation, and the
+    logits are averaged. The prediction for a thin filament then no longer
+    depends on which way the tiles happened to cut across it. Both input
+    channels -- intensity and the radius map -- are transformed together, so the
+    model always sees a geometrically consistent image.
+
+    Averaging makes logits less extreme than a single pass, so a threshold tuned
+    without TTA is not automatically right with it.
+    """
+    orientations = TTA_MODES[tta]
+    total: np.ndarray | None = None
+    for orientation in orientations:
+        logits = tiled_predict(model, _orient(x, *orientation), **tiled_kwargs)
+        logits = _unorient(logits, *orientation)
+        total = logits.copy() if total is None else total + logits
+    return total / len(orientations)

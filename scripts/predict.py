@@ -30,7 +30,7 @@ import torch
 from filament_seg.config import REPO_ROOT, SPLIT_PATH, TRAIN_ANNOTATIONS, ensure_output_dir
 from filament_seg.data import deduplicate_by_file, load_annotations
 from filament_seg.dataset import load_disk_geometry
-from filament_seg.model import build_model, select_device, tiled_predict
+from filament_seg.model import TTA_MODES, build_model, select_device, tiled_predict_tta
 from filament_seg.postprocess import PostprocessParams, binary_to_instances
 from filament_seg.rle import build_submission, labels_to_rles, write_submission
 
@@ -74,6 +74,8 @@ def main() -> None:
     parser.add_argument("--open-radius", type=int, default=2)
     parser.add_argument("--close-radius", type=int, default=5)
     parser.add_argument("--limit", type=int, default=0, help="debug: first N observations")
+    parser.add_argument("--tta", choices=list(TTA_MODES), default="none",
+                        help="average logits over flipped/rotated copies of each image")
     parser.add_argument("--out", default=None)
     parser.add_argument("--annotations", default=str(TRAIN_ANNOTATIONS))
     parser.add_argument("--split", default=str(SPLIT_PATH))
@@ -111,7 +113,7 @@ def main() -> None:
         open_radius=args.open_radius,
         close_radius=args.close_radius,
     )
-    print(f"post-processing: threshold={args.threshold} {postprocess_params}")
+    print(f"post-processing: threshold={args.threshold} tta={args.tta} {postprocess_params}")
     threshold_logit = _logit(args.threshold)
 
     predictions: dict[str, list] = {}
@@ -126,7 +128,8 @@ def main() -> None:
         radius = disk.radius_map(shape).astype(np.float32)
         x = np.stack([flat_u8.astype(np.float32) / 255.0, radius], axis=0)
 
-        logits = tiled_predict(model, x, tile=args.tile, overlap=args.overlap, device=device)
+        logits = tiled_predict_tta(model, x, tta=args.tta, tile=args.tile,
+                                   overlap=args.overlap, device=device)
         disk_mask = disk.mask(shape)
         binary = ((logits > threshold_logit) & disk_mask).astype(np.uint8)
         labels = binary_to_instances(binary, postprocess_params, restrict_to=disk_mask)
