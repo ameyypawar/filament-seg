@@ -5,10 +5,16 @@ Pushed as a private batch script with
     kaggle kernels push -p kaggle/
 
 It clones this repository, builds the preprocessing cache, trains the U-Net to
-completion, sweeps post-processing on half of the validation observations,
-checks the winner against the defaults on the other half, and writes a
-submission for each. Locally there is only Apple MPS, where the same training
-takes about four and a half hours; a Kaggle GPU does it in a fraction of that.
+completion, sweeps post-processing on half of the validation observations, and
+predicts validation and test with the winning settings; the other half of the
+validation set is kept for judging the result against earlier runs. Locally
+there is only Apple MPS, where the same training takes about four and a half
+hours; a Kaggle GPU does it in a fraction of that.
+
+TARGET and TTA below select the experiment. Run 1 (annotator labels, no TTA)
+scored 0.30 public, 0.32 once 8-orientation TTA was added locally; this
+configuration trains on the consensus of all annotators and applies the same
+TTA on the GPU, so its result is directly comparable to that 0.32.
 
 Large intermediates (the preprocessing cache, cached logits) live under /tmp so
 they are not saved as notebook output. Only what is worth keeping is copied to
@@ -35,18 +41,26 @@ KEEP = Path("/kaggle/working")
 
 EPOCHS = 30
 BATCH_SIZE = 16
+#: "consensus" trains against the per-observation average of every annotator's
+#: mask instead of one arbitrarily chosen annotator (inter-annotator PQ is only
+#: 0.34, so a single annotator's labels carry a lot of personal noise).
+TARGET = "consensus"
+#: Test-time augmentation for the sweep and the final predictions: all eight
+#: orientations, which is what lifted run 1 from 0.30 to 0.32 public.
+TTA = "dihedral"
 #: Validation observations scored after every epoch to pick the checkpoint.
 LIMIT_VAL = 48
 #: Half of the 144 validation observations; the other half judges the result.
 SWEEP_IMAGES = 72
-#: 144 combinations, around the current defaults. The full default grid is 540,
-#: which would spend hours of CPU on combinations far from anything sensible.
+#: Centred on what won with TTA in run 1 (threshold 0.7, open 0, bridge 16),
+#: with the threshold range widened: soft consensus targets change how the
+#: model's probabilities are calibrated, so the best cut-off may move.
 SWEEP_GRID = {
-    "--threshold": ["0.3", "0.4", "0.5", "0.6"],
-    "--min-area": ["200", "400"],
-    "--bridge-gap": ["8", "12", "16"],
-    "--close-radius": ["3", "5"],
-    "--open-radius": ["0", "1", "2"],
+    "--threshold": ["0.4", "0.5", "0.6", "0.7", "0.8"],
+    "--min-area": ["400"],
+    "--bridge-gap": ["12", "16"],
+    "--close-radius": ["3"],
+    "--open-radius": ["0", "1"],
 }
 #: PostprocessParams defaults plus the 0.5 probability threshold; the baseline
 #: every tuned setting has to beat.
@@ -195,7 +209,8 @@ def main() -> None:
     checkpoint = OUT / "model_best.pt"
     started = time.time()
     run([py, "scripts/train.py", "--epochs", EPOCHS, "--batch-size", BATCH_SIZE,
-         "--workers", workers, "--limit-val", LIMIT_VAL, "--out", checkpoint],
+         "--workers", workers, "--limit-val", LIMIT_VAL, "--target", TARGET,
+         "--out", checkpoint],
         env, log_to=OUT / "train.log")
     STATUS["train"] = f"ok ({(time.time() - started) / 60:.0f} min)"
     keep(checkpoint, OUT / "model_best_last.pt", OUT / "train.log", OUT / "splits.json")
@@ -204,7 +219,8 @@ def main() -> None:
     # --- 2. tune post-processing on half of the validation observations -------
     def sweep() -> None:
         args = [py, "scripts/sweep_postprocess.py", "--checkpoint", checkpoint,
-                "--device", "cuda", "--n-images", SWEEP_IMAGES, "--workers", workers]
+                "--device", "cuda", "--n-images", SWEEP_IMAGES, "--workers", workers,
+                "--tta", TTA]
         for flag, values in SWEEP_GRID.items():
             args += [flag, *values]
         run(args, env, log_to=OUT / "sweep.log")
@@ -216,35 +232,33 @@ def main() -> None:
         tuned = {key: best[key] for key in DEFAULTS}
         log(f"sweep winner: {tuned} (PQ {best['pq']:.4f} on the sweep's own images)")
 
-    # --- 3. predict validation and test with each setting ---------------------
-    variants = {"default": DEFAULTS}
-    if tuned != DEFAULTS:
-        variants["tuned"] = tuned
+    # --- 3. predict validation and test with the winning settings -------------
+    # Only the winner: with TTA every image is predicted eight times, and the
+    # comparison that matters -- against the 0.32 run -- is made on the held-out
+    # validation half after download, not against this run's own defaults.
+    name = f"{TARGET}_{TTA}"
 
-    def predict(subset: str, settings: dict, filename: str) -> None:
+    def predict(subset: str, filename: str) -> None:
         run([py, "scripts/predict.py", "--checkpoint", checkpoint, "--subset", subset,
-             "--threshold", settings["threshold"], "--min-area", settings["min_area"],
-             "--bridge-gap", settings["bridge_gap"], "--close-radius", settings["close_radius"],
-             "--open-radius", settings["open_radius"], "--out", OUT / filename], env)
+             "--tta", TTA,
+             "--threshold", tuned["threshold"], "--min-area", tuned["min_area"],
+             "--bridge-gap", tuned["bridge_gap"], "--close-radius", tuned["close_radius"],
+             "--open-radius", tuned["open_radius"], "--out", OUT / filename], env)
         keep(OUT / filename)
 
-    for label, settings in variants.items():
-        attempt(f"predict val ({label})", lambda: predict("val", settings, f"val_{label}.csv"))
-        attempt(f"predict test ({label})",
-                lambda: predict("test", settings, f"submission_{label}.csv"))
+    attempt("predict val", lambda: predict("val", f"val_{name}.csv"))
+    attempt("predict test", lambda: predict("test", f"submission_{name}.csv"))
 
-    # --- 4. judge tuned against default on the half the sweep never saw -------
+    # --- 4. score it on the half the sweep never saw ---------------------------
     def compare() -> None:
-        args = [py, "scripts/compare_holdout.py", "--sweep-images", SWEEP_IMAGES,
-                "--out", OUT / "holdout_comparison.json"]
-        for label in variants:
-            if (OUT / f"val_{label}.csv").exists():
-                args += ["--submission", OUT / f"val_{label}.csv"]
-        run(args, env, log_to=OUT / "holdout.log")
+        run([py, "scripts/compare_holdout.py", "--sweep-images", SWEEP_IMAGES,
+             "--out", OUT / "holdout_comparison.json",
+             "--submission", OUT / f"val_{name}.csv"], env, log_to=OUT / "holdout.log")
         keep(OUT / "holdout_comparison.json", OUT / "holdout.log")
 
     attempt("holdout comparison", compare)
-    write_summary(commit=commit, gpu=gpu, epochs=EPOCHS, defaults=DEFAULTS, tuned=tuned)
+    write_summary(commit=commit, gpu=gpu, epochs=EPOCHS, target=TARGET, tta=TTA,
+                  defaults=DEFAULTS, tuned=tuned)
     log(f"done: {STATUS}")
 
 
