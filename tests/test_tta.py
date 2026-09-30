@@ -13,7 +13,13 @@ import pytest
 import torch
 import torch.nn as nn
 
-from filament_seg.model import TTA_MODES, _orient, _unorient, tiled_predict_tta
+from filament_seg.model import (
+    TTA_MODES,
+    _orient,
+    _unorient,
+    ensemble_predict,
+    tiled_predict_tta,
+)
 
 
 class EchoModel(nn.Module):
@@ -52,3 +58,31 @@ def test_each_orientation_round_trips(image, orientation):
 def test_dihedral_covers_eight_distinct_orientations(image):
     seen = {_orient(image[0], *o).tobytes() for o in TTA_MODES["dihedral"]}
     assert len(seen) == 8
+
+
+class ScaledEcho(nn.Module):
+    """Returns the first input channel times a constant."""
+
+    def __init__(self, scale: float) -> None:
+        super().__init__()
+        self.scale = scale
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x[:, :1] * self.scale
+
+
+@pytest.mark.parametrize("mode", ["none", "dihedral"])
+def test_ensemble_averages_member_logits(image, mode):
+    """Members echoing x1 and x2 must average to exactly x1.5, under any TTA."""
+    out = ensemble_predict([ScaledEcho(1.0), ScaledEcho(2.0)], image, tta=mode,
+                           tile=128, overlap=32, device=torch.device("cpu"))
+    np.testing.assert_allclose(out[1:-1, 1:-1], 1.5 * image[0, 1:-1, 1:-1],
+                               rtol=1e-5, atol=1e-5)
+
+
+def test_single_member_ensemble_equals_tta(image):
+    kwargs = dict(tile=128, overlap=32, device=torch.device("cpu"))
+    np.testing.assert_array_equal(
+        ensemble_predict([EchoModel()], image, tta="flips", **kwargs),
+        tiled_predict_tta(EchoModel(), image, tta="flips", **kwargs),
+    )

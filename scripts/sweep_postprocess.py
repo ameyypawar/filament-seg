@@ -50,7 +50,7 @@ from filament_seg.data import deduplicate_by_file, load_annotations
 from filament_seg.dataset import load_disk_geometry
 from filament_seg.disk import Disk
 from filament_seg.metrics import evaluate_image
-from filament_seg.model import TTA_MODES, build_model, tiled_predict_tta
+from filament_seg.model import TTA_MODES, ensemble_predict, load_trained
 from filament_seg.postprocess import PostprocessParams, binary_to_instances
 from filament_seg.rle import Rle, labels_to_rles
 
@@ -74,17 +74,22 @@ def _cache_path(out_dir: Path, stem: str) -> Path:
     return out_dir / f"{stem}.npy"
 
 
-def _check_cache_provenance(out_dir: Path, checkpoint_path: str, tta: str, force: bool) -> None:
+def _check_cache_provenance(
+    out_dir: Path, checkpoint_paths: list[str], tta: str, force: bool
+) -> None:
     """Refuse to reuse cached logits produced by a different model or TTA mode.
 
     The cache is keyed by observation name alone, so without this a sweep run
     against a new checkpoint -- or with test-time augmentation switched on --
     would silently reuse stale logits and tune against the wrong predictions.
     """
-    checkpoint = Path(checkpoint_path).resolve()
-    stat = checkpoint.stat()
-    wanted = {"checkpoint": str(checkpoint), "size": stat.st_size,
-              "mtime": int(stat.st_mtime), "tta": tta}
+    checkpoints = []
+    for path in checkpoint_paths:
+        resolved = Path(path).resolve()
+        stat = resolved.stat()
+        checkpoints.append({"path": str(resolved), "size": stat.st_size,
+                            "mtime": int(stat.st_mtime)})
+    wanted = {"checkpoints": checkpoints, "tta": tta}
     meta_path = out_dir / "cache_meta.json"
     if meta_path.exists() and not force:
         found = json.loads(meta_path.read_text(encoding="utf-8"))
@@ -105,7 +110,7 @@ def _check_cache_provenance(out_dir: Path, checkpoint_path: str, tta: str, force
 
 def ensure_logits(
     payloads: list[tuple[str, str]],
-    checkpoint_path: str,
+    checkpoint_paths: list[str],
     disk_geometry: dict[str, Disk],
     flat_dir: Path,
     out_dir: Path,
@@ -115,9 +120,9 @@ def ensure_logits(
     force: bool,
     tta: str = "none",
 ) -> None:
-    """Cache ``tiled_predict``'s full-resolution logits for every stem, once."""
+    """Cache the (ensemble-averaged, TTA-averaged) logits for every stem, once."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    _check_cache_provenance(out_dir, checkpoint_path, tta, force)
+    _check_cache_provenance(out_dir, checkpoint_paths, tta, force)
     stems = sorted({stem for _, stem in payloads})
     pending = [s for s in stems if force or not _cache_path(out_dir, s).exists()]
     if not pending:
@@ -125,14 +130,8 @@ def ensure_logits(
         return
 
     print(f"device: {device}")
-    checkpoint = torch.load(checkpoint_path, map_location=device)
-    model = build_model(
-        encoder=checkpoint.get("encoder", "resnet34"),
-        in_channels=checkpoint.get("in_channels", 2),
-        weights=None,  # trained weights load next -- pretrained ones would just be overwritten
-    ).to(device)
-    model.load_state_dict(checkpoint["model"])
-    model.eval()
+    models = [load_trained(path, device) for path in checkpoint_paths]
+    print(f"models: {len(models)}")
 
     print(f"computing logits for {len(pending)}/{len(stems)} observations")
     for n, stem in enumerate(pending, start=1):
@@ -143,7 +142,7 @@ def ensure_logits(
         disk = disk_geometry[stem]
         radius = disk.radius_map(flat_u8.shape).astype(np.float32)
         x = np.stack([flat_u8.astype(np.float32) / 255.0, radius], axis=0)
-        logits = tiled_predict_tta(model, x, tta=tta, tile=tile, overlap=overlap, device=device)
+        logits = ensemble_predict(models, x, tta=tta, tile=tile, overlap=overlap, device=device)
         np.save(_cache_path(out_dir, stem), logits.astype(np.float16))
         if n % 5 == 0 or n == len(pending):
             print(f"  {n}/{len(pending)}", flush=True)
@@ -187,7 +186,8 @@ def _score_one_image(payload: tuple[str, str]) -> dict[int, tuple]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--checkpoint", required=True)
+    parser.add_argument("--checkpoint", nargs="+", required=True,
+                        help="one or more checkpoints; several are averaged as an ensemble")
     parser.add_argument("--annotations", default=str(TRAIN_ANNOTATIONS))
     parser.add_argument("--split", default=str(SPLIT_PATH))
     parser.add_argument("--cache-dir", default=str(DEFAULT_CACHE_DIR))

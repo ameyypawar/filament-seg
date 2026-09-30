@@ -198,3 +198,39 @@ def tiled_predict_tta(
         logits = _unorient(logits, *orientation)
         total = logits.copy() if total is None else total + logits
     return total / len(orientations)
+
+
+def load_trained(path: str, device: torch.device) -> nn.Module:
+    """Rebuild a trained model from a checkpoint written by ``scripts/train.py``.
+
+    The architecture is read from the checkpoint itself, and the pretrained
+    ImageNet weights are skipped, since the trained weights replace them at once.
+    """
+    checkpoint = torch.load(path, map_location=device)
+    model = build_model(
+        encoder=checkpoint.get("encoder", "resnet34"),
+        in_channels=checkpoint.get("in_channels", 2),
+        weights=None,
+    ).to(device)
+    model.load_state_dict(checkpoint["model"])
+    model.eval()
+    return model
+
+
+@torch.no_grad()
+def ensemble_predict(
+    models: list[nn.Module], x: np.ndarray, tta: str = "none", **tiled_kwargs
+) -> np.ndarray:
+    """Average the logits of several models, each with the same TTA applied.
+
+    An ensemble helps when its members make different mistakes. Here the model
+    trained on single-annotator labels and the one trained on the annotators'
+    consensus each came out ahead on about half of the held-out validation
+    images, which is exactly the situation averaging exploits. With one model
+    this is simply ``tiled_predict_tta``.
+    """
+    total: np.ndarray | None = None
+    for model in models:
+        logits = tiled_predict_tta(model, x, tta=tta, **tiled_kwargs)
+        total = logits if total is None else total + logits
+    return total / len(models)

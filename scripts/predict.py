@@ -25,12 +25,11 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-import torch
 
 from filament_seg.config import REPO_ROOT, SPLIT_PATH, TRAIN_ANNOTATIONS, ensure_output_dir
 from filament_seg.data import deduplicate_by_file, load_annotations
 from filament_seg.dataset import load_disk_geometry
-from filament_seg.model import TTA_MODES, build_model, select_device, tiled_predict_tta
+from filament_seg.model import TTA_MODES, ensemble_predict, load_trained, select_device
 from filament_seg.postprocess import PostprocessParams, binary_to_instances
 from filament_seg.rle import build_submission, labels_to_rles, write_submission
 
@@ -62,7 +61,8 @@ def resolve_stems(args: argparse.Namespace) -> list[str]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--checkpoint", required=True)
+    parser.add_argument("--checkpoint", nargs="+", required=True,
+                        help="one or more checkpoints; several are averaged as an ensemble")
     parser.add_argument("--subset", choices=["test", "val"], default="test")
     parser.add_argument("--tile", type=int, default=512)
     parser.add_argument("--overlap", type=int, default=128)
@@ -85,14 +85,8 @@ def main() -> None:
     device = select_device()
     print(f"device: {device}")
 
-    checkpoint = torch.load(args.checkpoint, map_location=device)
-    model = build_model(
-        encoder=checkpoint.get("encoder", "resnet34"),
-        in_channels=checkpoint.get("in_channels", 2),
-        weights=None,  # trained weights load next -- pretrained ones would just be overwritten
-    ).to(device)
-    model.load_state_dict(checkpoint["model"])
-    model.eval()
+    models = [load_trained(path, device) for path in args.checkpoint]
+    print(f"models: {len(models)} ({', '.join(args.checkpoint)})")
 
     cache_dir = Path(args.cache_dir)
     disk_geometry = load_disk_geometry(cache_dir / "disk.json")
@@ -128,8 +122,8 @@ def main() -> None:
         radius = disk.radius_map(shape).astype(np.float32)
         x = np.stack([flat_u8.astype(np.float32) / 255.0, radius], axis=0)
 
-        logits = tiled_predict_tta(model, x, tta=args.tta, tile=args.tile,
-                                   overlap=args.overlap, device=device)
+        logits = ensemble_predict(models, x, tta=args.tta, tile=args.tile,
+                                  overlap=args.overlap, device=device)
         disk_mask = disk.mask(shape)
         binary = ((logits > threshold_logit) & disk_mask).astype(np.uint8)
         labels = binary_to_instances(binary, postprocess_params, restrict_to=disk_mask)
