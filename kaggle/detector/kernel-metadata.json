@@ -1,0 +1,13 @@
+{
+  "id": "ameypawar123456789/filament-seg-detector",
+  "title": "filament-seg-detector",
+  "code_file": "run.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_internet": true,
+  "dataset_sources": [],
+  "competition_sources": ["filament-segmentation-2026"],
+  "kernel_sources": []
+}

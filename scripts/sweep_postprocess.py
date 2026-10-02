@@ -36,10 +36,8 @@ from pathlib import Path as _Path
 sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
 
 import argparse
-import dataclasses
 import itertools
 import json
-import os
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
@@ -60,15 +58,14 @@ from filament_seg.data import (
     sample_stems,
     stems_of,
 )
-from filament_seg.dataset import load_disk_geometry, load_model_input
+from filament_seg.dataset import load_disk_geometry
 from filament_seg.disk import Disk
-from filament_seg.metrics import evaluate_image
-from filament_seg.model import TTA_MODES, ensemble_predict, load_trained, select_device
-from filament_seg.postprocess import PostprocessParams, logits_to_instances
+from filament_seg.logit_cache import cache_path, ensure_logits
+from filament_seg.scoring import COUNT_FIELDS, paired_bootstrap, pq_of, view_totals
+from filament_seg.model import TTA_MODES, select_device
+from filament_seg.postprocess import PostprocessParams, logits_to_instances, parse_settings
 from filament_seg.rle import Rle, labels_to_rles
 
-#: Per-observation totals, in this order, summed over the observation's views.
-COUNT_FIELDS = ("n_gt", "n_pred", "tp", "fp", "fn", "iou_sum")
 #: The post-processing settings the grid varies (``fill_holes`` stays on).
 SWEPT = ("threshold", "min_area", "bridge_gap", "close_radius", "open_radius", "min_confidence")
 
@@ -77,94 +74,6 @@ _GT: dict[str, list[Rle]] = {}
 _GRID: list[PostprocessParams] = []
 _DISK: dict[str, Disk] = {}
 _LOGIT_DIR: Path = Path()
-
-
-def _cache_path(logit_dir: Path, stem: str) -> Path:
-    return logit_dir / f"{stem}.npy"
-
-
-def _check_cache_provenance(
-    logit_dir: Path,
-    checkpoint_paths: list[str],
-    tta: str,
-    tile: int,
-    overlap: int,
-    force: bool,
-) -> None:
-    """Make sure every cached logit map was produced by this model and setup.
-
-    The cache is keyed by observation name alone, so without this a sweep run
-    against a new checkpoint, TTA mode or tiling would silently reuse stale
-    logits and tune against the wrong predictions. ``force`` deletes the old
-    maps *before* recording the new provenance: otherwise a forced run that
-    died part-way would leave the previous model's maps under the new record,
-    and the next plain run would accept them.
-    """
-    checkpoints = []
-    for path in checkpoint_paths:
-        resolved = Path(path).resolve()
-        stat = resolved.stat()
-        checkpoints.append({"path": str(resolved), "size": stat.st_size,
-                            "mtime": int(stat.st_mtime)})
-    wanted = {"checkpoints": checkpoints, "tta": tta, "tile": tile, "overlap": overlap}
-
-    logit_dir.mkdir(parents=True, exist_ok=True)
-    meta_path = logit_dir / "cache_meta.json"
-    cached = sorted(logit_dir.glob("*.npy"))
-    if force:
-        for path in cached:
-            path.unlink()
-    elif meta_path.exists():
-        found = json.loads(meta_path.read_text(encoding="utf-8"))
-        if found != wanted:
-            raise SystemExit(
-                f"{logit_dir} holds logits from a different model or setup:\n"
-                f"  cached: {found}\n  wanted: {wanted}\n"
-                "use a different --out-dir, or --force to recompute"
-            )
-    elif cached:
-        raise SystemExit(
-            f"{logit_dir} holds cached logits with no record of which model made them; "
-            "use a different --out-dir, or --force to recompute"
-        )
-    meta_path.write_text(json.dumps(wanted, indent=2), encoding="utf-8")
-
-
-def ensure_logits(
-    stems: list[str],
-    checkpoint_paths: list[str],
-    disk_geometry: dict[str, Disk],
-    flat_dir: Path,
-    logit_dir: Path,
-    tile: int,
-    overlap: int,
-    device: torch.device,
-    force: bool,
-    tta: str = "none",
-) -> None:
-    """Cache the (ensemble-averaged, TTA-averaged) logits for every stem, once."""
-    _check_cache_provenance(logit_dir, checkpoint_paths, tta, tile, overlap, force)
-    pending = [s for s in stems if not _cache_path(logit_dir, s).exists()]
-    if not pending:
-        print(f"logits: {len(stems)}/{len(stems)} already cached, skipping model load")
-        return
-
-    print(f"device: {device}")
-    models = [load_trained(path, device) for path in checkpoint_paths]
-    print(f"models: {len(models)}; computing logits for {len(pending)}/{len(stems)} observations")
-    for n, stem in enumerate(pending, start=1):
-        x = load_model_input(flat_dir, stem, disk_geometry[stem])
-        if x is None:
-            raise SystemExit(f"no cached flat image for {stem} -- run scripts/preprocess.py")
-        logits = ensemble_predict(models, x, tta=tta, tile=tile, overlap=overlap, device=device)
-        # Written under a temporary name and renamed, so an interrupted run can
-        # never leave a truncated map that a later run would take as complete.
-        partial = logit_dir / f"{stem}.npy.partial"
-        with open(partial, "wb") as handle:
-            np.save(handle, logits.astype(np.float16))
-        os.replace(partial, _cache_path(logit_dir, stem))
-        if n % 5 == 0 or n == len(pending):
-            print(f"  {n}/{len(pending)}", flush=True)
 
 
 def _init(
@@ -180,14 +89,12 @@ def _init(
 
 def _score_stem(stem: str) -> np.ndarray:
     """Totals for every grid point on one observation, pooled over its views."""
-    logits = np.load(_cache_path(_LOGIT_DIR, stem)).astype(np.float32)
+    logits = np.load(cache_path(_LOGIT_DIR, stem)).astype(np.float32)
     disk_mask = _DISK[stem].mask(logits.shape)
     out = np.zeros((len(_GRID), len(COUNT_FIELDS)), dtype=np.float64)
     for index, params in enumerate(_GRID):
         pred_rles = labels_to_rles(logits_to_instances(logits, disk_mask, params))
-        for image_id in _VIEWS[stem]:
-            r = evaluate_image(image_id, _GT[image_id], pred_rles, with_fragmentation=False)
-            out[index] += (r.n_gt, r.n_pred, r.tp, r.fp, r.fn, r.iou_sum)
+        out[index] = view_totals(_VIEWS[stem], _GT, pred_rles)
     return out
 
 
@@ -213,44 +120,12 @@ def score_stems(
     return np.stack(per_stem)
 
 
-def pq_of(totals: np.ndarray) -> np.ndarray:
-    """Pooled PQ from summed totals; works on any leading shape."""
-    tp, fp, fn, iou_sum = (totals[..., COUNT_FIELDS.index(k)] for k in ("tp", "fp", "fn", "iou_sum"))
-    denominator = tp + 0.5 * fp + 0.5 * fn
-    return np.divide(iou_sum, denominator, out=np.zeros_like(iou_sum), where=denominator > 0)
-
-
-def paired_bootstrap(
-    per_stem_a: np.ndarray, per_stem_b: np.ndarray, n_boot: int = 2000, seed: int = 0
-) -> tuple[float, float, float]:
-    """PQ(a) - PQ(b) on all observations, with a 95% interval from resampling them.
-
-    Observations, not views, are resampled -- an observation's views share one
-    set of predictions -- and both settings see the same resample each time.
-    """
-    n = per_stem_a.shape[0]
-    weights = np.random.default_rng(seed).multinomial(n, np.full(n, 1.0 / n), size=n_boot)
-    # einsum rather than `@`: macOS's Accelerate BLAS raises spurious
-    # floating-point warnings in matmul, and this is far too small to need BLAS.
-    deltas = (pq_of(np.einsum("bs,sk->bk", weights, per_stem_a))
-              - pq_of(np.einsum("bs,sk->bk", weights, per_stem_b)))
-    full = float(pq_of(per_stem_a.sum(axis=0)) - pq_of(per_stem_b.sum(axis=0)))
-    low, high = np.percentile(deltas, [2.5, 97.5])
-    return full, float(low), float(high)
-
-
 def parse_params(text: str) -> PostprocessParams:
-    """``"threshold=0.7,min_area=400"`` -> PostprocessParams, other fields at defaults."""
-    defaults = PostprocessParams()
-    values: dict = {}
-    for item in filter(None, (part.strip() for part in text.split(","))):
-        key, _, raw = item.partition("=")
-        key = key.strip()
-        if not hasattr(defaults, key):
-            raise argparse.ArgumentTypeError(f"unknown post-processing setting {key!r}")
-        kind = type(getattr(defaults, key))
-        values[key] = raw.strip().lower() in ("1", "true", "yes") if kind is bool else kind(raw)
-    return dataclasses.replace(defaults, **values)
+    """Post-processing settings from ``"threshold=0.7,min_area=400"`` (argparse type)."""
+    try:
+        return parse_settings(text, PostprocessParams())
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
 
 
 def settings_of(params: PostprocessParams) -> dict:

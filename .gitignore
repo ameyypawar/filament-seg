@@ -5,6 +5,7 @@ data/
 # Generated artefacts
 outputs/
 !outputs/.gitkeep
+*.pt
 *.pth
 *.ckpt
 *.csv

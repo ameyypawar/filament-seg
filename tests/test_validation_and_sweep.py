@@ -22,6 +22,7 @@ from filament_seg.data import (
     sample_stems,
     stems_of,
 )
+from filament_seg import logit_cache
 from filament_seg.postprocess import (
     PostprocessParams,
     drop_low_confidence,
@@ -156,26 +157,26 @@ def test_forced_rerun_deletes_the_previous_models_logits(tmp_path):
     model_a = _fake_checkpoint(tmp_path / "a.pt", b"a")
     model_b = _fake_checkpoint(tmp_path / "b.pt", b"bb")
     cache = tmp_path / "logits"
-    sweep._check_cache_provenance(cache, [model_a], "none", 512, 128, force=False)
+    logit_cache.check_cache_provenance(cache, [model_a], "none", 512, 128, force=False)
     for stem in ("s1", "s2", "s3"):
         np.save(cache / f"{stem}.npy", np.zeros(2))
 
     # A forced run for model B that dies before writing anything...
-    sweep._check_cache_provenance(cache, [model_b], "none", 512, 128, force=True)
+    logit_cache.check_cache_provenance(cache, [model_b], "none", 512, 128, force=True)
     # ...must not leave model A's maps behind for the next plain run to accept.
     assert not list(cache.glob("*.npy"))
-    sweep._check_cache_provenance(cache, [model_b], "none", 512, 128, force=False)
+    logit_cache.check_cache_provenance(cache, [model_b], "none", 512, 128, force=False)
 
 
 def test_cache_refuses_another_model_tta_or_tiling(tmp_path):
     model = _fake_checkpoint(tmp_path / "a.pt", b"a")
     other = _fake_checkpoint(tmp_path / "b.pt", b"bb")
     cache = tmp_path / "logits"
-    sweep._check_cache_provenance(cache, [model], "none", 512, 128, force=False)
+    logit_cache.check_cache_provenance(cache, [model], "none", 512, 128, force=False)
     for args in (([other], "none", 512, 128), ([model], "dihedral", 512, 128),
                  ([model], "none", 1024, 128)):
         with pytest.raises(SystemExit):
-            sweep._check_cache_provenance(cache, *args, force=False)
+            logit_cache.check_cache_provenance(cache, *args, force=False)
     meta = json.loads((cache / "cache_meta.json").read_text())
     assert meta["tile"] == 512 and meta["overlap"] == 128
 
@@ -185,7 +186,7 @@ def test_unlabelled_cache_is_refused(tmp_path):
     cache.mkdir()
     np.save(cache / "s1.npy", np.zeros(2))
     with pytest.raises(SystemExit):
-        sweep._check_cache_provenance(cache, [_fake_checkpoint(tmp_path / "a.pt", b"a")],
+        logit_cache.check_cache_provenance(cache, [_fake_checkpoint(tmp_path / "a.pt", b"a")],
                                       "none", 512, 128, force=False)
 
 

@@ -21,7 +21,9 @@ quietly disagree about what a setting means.
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
+from typing import TypeVar
 
 import cv2
 import numpy as np
@@ -49,6 +51,26 @@ class PostprocessParams:
     #: denominator for nothing, so a faint, uncertain component is often worth
     #: more unsubmitted.
     min_confidence: float = 0.0
+
+
+_Settings = TypeVar("_Settings")
+
+
+def parse_settings(text: str, defaults: _Settings) -> _Settings:
+    """``"threshold=0.7,min_area=400"`` -> a copy of ``defaults`` with those fields set.
+
+    Values are converted to each field's type; an unknown name raises
+    ``ValueError`` rather than being silently ignored.
+    """
+    values: dict = {}
+    for item in filter(None, (part.strip() for part in text.split(","))):
+        key, _, raw = item.partition("=")
+        key = key.strip()
+        if not hasattr(defaults, key):
+            raise ValueError(f"unknown setting {key!r} for {type(defaults).__name__}")
+        kind = type(getattr(defaults, key))
+        values[key] = raw.strip().lower() in ("1", "true", "yes") if kind is bool else kind(raw)
+    return dataclasses.replace(defaults, **values)
 
 
 def probability_to_logit(p: float) -> float:
