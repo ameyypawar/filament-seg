@@ -54,7 +54,8 @@ from filament_seg.postprocess import PostprocessParams, logits_to_instances, par
 from filament_seg.rle import Rle, build_submission, labels_to_rles, write_submission
 from filament_seg.scoring import COUNT_FIELDS, paired_bootstrap, pq_of, view_totals
 
-SWEPT = ("threshold", "close_radius", "grow", "min_score", "min_area", "keep_unclaimed")
+SWEPT = ("threshold", "close_radius", "grow", "min_score", "min_area", "keep_unclaimed",
+         "unclaimed_gap")
 
 _VIEWS: dict[str, list[str]] = {}
 _GT: dict[str, list[Rle]] = {}
@@ -97,7 +98,7 @@ def _score_stem(stem: str) -> np.ndarray:
             if params.grow not in regions:
                 regions[params.grow] = grow_regions(detections, params.grow, logits.shape, floor)
             labels = assign(binaries[key], regions[params.grow], params.min_score,
-                            params.min_area, params.keep_unclaimed)
+                            params.min_area, params.keep_unclaimed, params.unclaimed_gap)
         else:
             labels = logits_to_instances(logits, disk_mask, params)
         out[index] = view_totals(_VIEWS[stem], _GT, labels_to_rles(labels))
@@ -122,7 +123,7 @@ def describe(params) -> str:
     if isinstance(params, FusionParams):
         return (f"fusion thr={params.threshold:.2f} close={params.close_radius} "
                 f"grow={params.grow} score>={params.min_score:.2f} area={params.min_area} "
-                f"keep={params.keep_unclaimed}")
+                f"keep={params.keep_unclaimed}/{params.unclaimed_gap}")
     return (f"U-Net only thr={params.threshold:.2f} area={params.min_area} "
             f"gap={params.bridge_gap} close={params.close_radius} open={params.open_radius}")
 
@@ -154,7 +155,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--grow", type=int, nargs="+", default=[4, 8, 16])
     parser.add_argument("--min-score", type=float, nargs="+", default=[0.15, 0.25, 0.35, 0.5])
     parser.add_argument("--min-area", type=int, nargs="+", default=[200, 400])
-    parser.add_argument("--keep-unclaimed", type=int, nargs="+", default=[0, 2000])
+    parser.add_argument("--keep-unclaimed", type=int, nargs="+", default=[0, 400, 2000])
+    parser.add_argument("--unclaimed-gap", type=int, nargs="+", default=[24])
     parser.add_argument("--holdout-top", type=int, default=5)
     parser.add_argument("--tile", type=int, default=512)
     parser.add_argument("--overlap", type=int, default=128)
@@ -189,7 +191,7 @@ def main() -> None:
 
     grid = [FusionParams(**dict(zip(SWEPT, combo))) for combo in itertools.product(
         args.threshold, args.close_radius, args.grow, args.min_score, args.min_area,
-        args.keep_unclaimed)]
+        args.keep_unclaimed, args.unclaimed_gap)]
     print(f"tuning on {len(tune)} observations x {len(grid)} fusion settings")
     tune_totals = score_stems(tune, grid, views, gt, detections, disk_geometry, logit_dir,
                               args.workers).sum(axis=0)

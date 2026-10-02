@@ -22,10 +22,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import train_on_kaggle as k  # noqa: E402
 
-MODEL = "yolo11s-seg.pt"
-IMGSZ = 1024
-EPOCHS = 60
+#: Detector 1 (yolo11s-seg, 1024 px, 60 epochs) lifted held-out PQ by +0.037
+#: and the public score from 0.32 to 0.36; its validation mAP was still
+#: creeping up at the end. Detector 2 is bigger, sees finer detail and trains
+#: longer.
+MODEL = "yolo11m-seg.pt"
+IMGSZ = 1280
+EPOCHS = 80
+#: Total across both GPUs (Ultralytics splits it per device).
 BATCH = 8
+#: Both T4s; if distributed training fails, one GPU is tried from scratch.
+DEVICES = "0,1"
 #: Pinned below the next major version: the training and prediction calls
 #: were written against the 8.x API.
 ULTRALYTICS = "ultralytics>=8.3,<9"
@@ -46,8 +53,9 @@ def main() -> None:
     k.log(f"GPU: {gpu} | repo at {commit}")
 
     subprocess.run([sys.executable, "-m", "pip", "install", "-q", ULTRALYTICS], check=True)
+    # The first import prints a settings banner; the version is the last line.
     version = subprocess.run([sys.executable, "-c", "import ultralytics; print(ultralytics.__version__)"],
-                             capture_output=True, text=True).stdout.strip()
+                             capture_output=True, text=True).stdout.strip().splitlines()[-1]
     k.log(f"ultralytics {version}")
 
     data_root = k.find_data_root()
@@ -55,8 +63,8 @@ def main() -> None:
            "FILAMENT_OUTPUT_ROOT": str(k.OUT), "PYTHONUNBUFFERED": "1"}
     workers = min(4, os.cpu_count() or 2)
     py = sys.executable
-    k.write_summary(commit=commit, gpu=gpu, ultralytics=version, model=MODEL, imgsz=IMGSZ,
-                    epochs=EPOCHS, batch=BATCH)
+    k.write_summary(commit=commit, gpu=gpu, gpus=torch.cuda.device_count(), ultralytics=version,
+                    model=MODEL, imgsz=IMGSZ, epochs=EPOCHS, batch=BATCH, devices=DEVICES)
 
     k.run([py, "scripts/preprocess.py", "--workers", workers], env)
     k.run([py, "scripts/make_splits.py", "--group-by", "date"], env)
@@ -65,12 +73,17 @@ def main() -> None:
     k.run([py, "scripts/export_yolo.py", "--out", yolo_dir], env)
 
     detector_dir = k.KEEP / "detector"
-    k.attempt("train detector", lambda: k.run(
-        [py, "scripts/train_detector.py", "--data", yolo_dir / "data.yaml", "--out", detector_dir,
-         "--model", MODEL, "--imgsz", IMGSZ, "--epochs", EPOCHS, "--batch", BATCH,
-         "--device", "0", "--workers", workers],
-        env, log_to=k.OUT / "detector_train.log"))
-    k.keep(k.OUT / "detector_train.log")
+
+    def train(devices: str) -> bool:
+        return k.attempt(f"train detector on {devices}", lambda: k.run(
+            [py, "scripts/train_detector.py", "--data", yolo_dir / "data.yaml",
+             "--out", detector_dir, "--model", MODEL, "--imgsz", IMGSZ, "--epochs", EPOCHS,
+             "--batch", BATCH, "--device", devices, "--workers", workers, "--patience", 25],
+            env, log_to=k.OUT / f"detector_train_{devices.replace(',', '')}.log"))
+
+    if not train(DEVICES) and DEVICES != "0":
+        train("0")
+    k.keep(*k.OUT.glob("detector_train_*.log"))
     weights = detector_dir / "detector_best.pt"
     if not weights.exists():
         # Training died part-way: fall back to the best epoch Ultralytics saved.

@@ -66,6 +66,15 @@ def test_small_claims_are_dropped_and_large_orphans_kept_on_request():
     assert kept.max() == 2 and (kept[40:50, 40:60] == 2).all()
 
 
+def test_unclaimed_fragments_are_grouped_like_the_unet_pipeline():
+    # Two 100 px fragments 6 px apart, unclaimed: bridged into one 200 px
+    # instance they clear keep_unclaimed=150; left apart, neither does.
+    binary = _binary((slice(40, 50), slice(10, 20)), (slice(40, 50), slice(26, 36)))
+    assert assign(binary, [], 0.5, 1, keep_unclaimed=150, unclaimed_gap=0).max() == 0
+    joined = assign(binary, [], 0.5, 1, keep_unclaimed=150, unclaimed_gap=12)
+    assert joined.max() == 1 and (joined[binary] == 1).all()
+
+
 def test_growing_reaches_pixels_just_outside_the_coarse_mask():
     binary = _binary((slice(10, 14), slice(5, 30)))
     detections = [_detection(0.9, slice(11, 13), slice(8, 27))]   # thinner, shorter
