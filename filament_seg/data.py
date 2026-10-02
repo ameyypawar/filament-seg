@@ -20,12 +20,12 @@ import json
 import random
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Iterable, Literal, Sequence
 
 from .config import IMAGE_HEIGHT, IMAGE_WIDTH, TRAIN_ANNOTATIONS
 from .rle import Rle, polygon_to_rle
 
-GroupBy = str  # "file" | "date" | "month"
+GroupBy = Literal["file", "date", "month"]
 
 
 @dataclass(frozen=True)
@@ -161,8 +161,11 @@ def deduplicate_by_file(
 ) -> list[str]:
     """Keep one annotator per observation.
 
-    Useful for training (the duplicates are label noise, not extra signal) and
-    for validation (scoring against every annotator double-counts easy images).
+    Used for training, where the duplicates are label noise rather than extra
+    signal. Validation should not use it: the official scorer matches the
+    predictions against every annotator's view separately and pools the
+    counts, so scoring against one random annotator optimises a different
+    objective. See :func:`records_for_stems`.
     """
     rng = random.Random(seed)
     chosen: list[str] = []
@@ -172,6 +175,44 @@ def deduplicate_by_file(
     for stem in sorted(grouped):
         chosen.append(rng.choice(sorted(grouped[stem])))
     return sorted(chosen)
+
+
+def load_split(path: str | Path) -> dict:
+    """The train/val split written by scripts/make_splits.py."""
+    return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def stems_of(annotations: Annotations, image_ids: Iterable[str]) -> list[str]:
+    """The observations (file stems) that ``image_ids`` are views of, sorted."""
+    return sorted({annotations.images[i].stem for i in image_ids})
+
+
+def sample_stems(
+    annotations: Annotations, image_ids: Iterable[str], n: int | None = None, seed: int = 0
+) -> list[str]:
+    """A fixed random sample of ``n`` observations (all of them if ``n`` is falsy).
+
+    Sampling observations rather than taking the first ``n`` sorted view ids
+    matters: view ids start with the annotator batch, so a sorted prefix comes
+    entirely from one batch of annotators. Shuffling with a fixed seed gives
+    the same sample on every call, so per-epoch scores stay comparable.
+    """
+    stems = stems_of(annotations, image_ids)
+    random.Random(seed).shuffle(stems)
+    return sorted(stems[:n] if n else stems)
+
+
+def records_for_stems(
+    annotations: Annotations, image_ids: Iterable[str], stems: Iterable[str]
+) -> list[str]:
+    """Every annotator view among ``image_ids`` of the given observations.
+
+    This is the unit the official scorer works in: one prediction set per
+    observation, matched against each annotator's view of it separately, with
+    TP/FP/FN pooled over all views.
+    """
+    wanted = set(stems)
+    return sorted(i for i in image_ids if annotations.images[i].stem in wanted)
 
 
 def test_image_paths(directory: str | Path) -> list[Path]:

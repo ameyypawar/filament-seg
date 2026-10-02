@@ -110,3 +110,39 @@ def test_bridging_merges_a_split_filament():
     )
     assert split.max() == 2
     assert joined.max() == 1
+
+
+def _sun(center: tuple[float, float], radius: float, halo_width: float = 0.0,
+         halo_level: float = 0.0, size: int = SIZE) -> np.ndarray:
+    """A limb-darkened disk, optionally inside a smooth bright halo annulus."""
+    ys, xs = np.ogrid[:size, :size]
+    r = np.sqrt((xs - center[0]) ** 2 + (ys - center[1]) ** 2) / radius
+    image = np.zeros((size, size), dtype=np.float32)
+    image[(r > 1.0) & (r <= 1.0 + halo_width / radius)] = halo_level
+    inside = r <= 1.0
+    image[inside] = 200.0 * (0.4 + 0.6 * np.sqrt(np.clip(1 - r[inside] ** 2, 0, 1)))
+    image += np.random.default_rng(1).normal(0, 1.5, image.shape).astype(np.float32)
+    return np.clip(image, 0, 255).astype(np.uint8)
+
+
+def test_disk_detection_ignores_a_bright_halo():
+    # Real GONG frames carry a smooth annulus outside the limb, sometimes as
+    # bright as the disk edge. Its outer border is a crisp circle too; an
+    # intensity threshold alone lands on it, tens of pixels beyond the limb.
+    image = _sun((256.0, 256.0), radius=200.0, halo_width=36.0, halo_level=100.0)
+    disk = detect_disk(image)
+    # Here the disk dims to 80 at the limb and the halo steps back up to 100,
+    # so "the edge" is only defined to within a few pixels; what matters is
+    # not landing on the halo's border, 36 px out.
+    assert disk.radius == pytest.approx(200.0, abs=4.0)
+    assert disk.cx == pytest.approx(256.0, abs=2.0)
+    assert disk.cy == pytest.approx(256.0, abs=2.0)
+
+
+def test_disk_detection_finds_an_off_centre_disk():
+    # Not every frame follows the standard GONG geometry.
+    image = _sun((230.0, 282.0), radius=190.0)
+    disk = detect_disk(image)
+    assert disk.radius == pytest.approx(190.0, abs=2.0)
+    assert disk.cx == pytest.approx(230.0, abs=2.0)
+    assert disk.cy == pytest.approx(282.0, abs=2.0)

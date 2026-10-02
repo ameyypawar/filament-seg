@@ -25,7 +25,7 @@ from filament_seg.config import (
     TRAIN_ANNOTATIONS,
     ensure_output_dir,
 )
-from filament_seg.data import deduplicate_by_file, load_annotations
+from filament_seg.data import deduplicate_by_file, load_annotations, load_split
 from filament_seg.metrics import evaluate, format_report
 from filament_seg.rle import read_submission
 
@@ -37,19 +37,18 @@ def main() -> None:
     parser.add_argument("--split", default=str(SPLIT_PATH))
     parser.add_argument("--subset", choices=["train", "val"], default="val")
     parser.add_argument(
-        "--all-annotators",
+        "--one-annotator",
         action="store_true",
-        help="score against every annotator instead of one per observation "
-        "(the default keeps heavily-annotated images from dominating)",
+        help="score against one random annotator per observation instead of every "
+        "annotator; the default matches the organisers' scoring, which pools all views",
     )
     parser.add_argument("--iou-threshold", type=float, default=PQ_IOU_THRESHOLD)
     parser.add_argument("--out", default=None)
     args = parser.parse_args()
 
     annotations = load_annotations(args.annotations)
-    split = json.loads(Path(args.split).read_text(encoding="utf-8"))
-    image_ids = split[args.subset]
-    if not args.all_annotators:
+    image_ids = load_split(args.split)[args.subset]
+    if args.one_annotator:
         image_ids = deduplicate_by_file(annotations, image_ids)
 
     predictions_by_stem = read_submission(args.submission)
@@ -64,7 +63,7 @@ def main() -> None:
 
     summary, _ = evaluate(gt, pred, iou_threshold=args.iou_threshold)
     print(f"subset={args.subset}  views={len(image_ids)}  "
-          f"annotators={'all' if args.all_annotators else 'one per observation'}")
+          f"annotators={'one per observation' if args.one_annotator else 'all'}")
     print(format_report(summary))
 
     out = Path(args.out or (ensure_output_dir() / f"eval_{args.subset}.json"))

@@ -1,14 +1,19 @@
-"""Compare post-processing choices on validation observations the sweep never saw.
+"""Compare validation submissions on observations the post-processing sweep never saw.
 
 sweep_postprocess.py picks its settings on a random subset of the validation
-observations. Scoring the winner on those same observations overstates it: with
-144 combinations to choose from, the best one is partly just the luckiest one.
-This reproduces exactly which observations the sweep used and scores each
-submission on the complement, which is the honest comparison. It also reports
-the sweep's own subset and the whole split, so the size of that optimism is
-visible rather than assumed.
+observations. Scoring the winner on those same observations overstates it:
+with dozens of combinations to choose from, the best one is partly just the
+luckiest one. This scores each submission on the complement, which is the
+honest comparison, and also on the sweep's own subset and the whole split, so
+the size of that optimism is visible rather than assumed.
 
-    python scripts/compare_holdout.py --sweep-images 72 \\
+The split is read from the sweep's ``<out>_subset.json`` rather than
+re-derived, so it is exactly the one the sweep scored. Scoring mirrors the
+organisers' self-evaluation notebook: each observation's predictions are
+matched against every annotator's view of it, and TP/FP/FN are pooled over
+all views.
+
+    python scripts/compare_holdout.py --sweep-subset outputs/sweep_postprocess_subset.json \\
         --submission outputs/val_default.csv --submission outputs/val_tuned.csv
 """
 
@@ -22,48 +27,41 @@ sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
 
 import argparse
 import json
-import random
 from pathlib import Path
 
-from filament_seg.config import SPLIT_PATH, TRAIN_ANNOTATIONS, ensure_output_dir
-from filament_seg.data import deduplicate_by_file, load_annotations
+from filament_seg.config import OUTPUT_ROOT, SPLIT_PATH, TRAIN_ANNOTATIONS, ensure_output_dir
+from filament_seg.data import load_annotations, load_split, records_for_stems, stems_of
 from filament_seg.metrics import evaluate
 from filament_seg.rle import read_submission
 
-
-def sweep_subset(all_ids: list[str], n_images: int, seed: int) -> set[str]:
-    """The validation views sweep_postprocess.py scored, reproduced exactly.
-
-    Mirrors its selection: shuffle the deduplicated validation ids with
-    random.Random(seed) and take the first n_images.
-    """
-    shuffled = list(all_ids)
-    random.Random(seed).shuffle(shuffled)
-    return set(shuffled[:n_images])
+SUMMARY_KEYS = ("pq_pooled", "pq_per_image_mean", "sq", "rq", "tp", "fp", "fn",
+                "one_to_many", "many_to_one", "n_images")
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--submission", action="append", required=True,
                         help="validation-set submission CSV; repeat to compare several")
-    parser.add_argument("--sweep-images", type=int, required=True,
-                        help="the --n-images the sweep was run with")
-    parser.add_argument("--seed", type=int, default=0, help="the sweep's --seed")
+    parser.add_argument("--sweep-subset",
+                        default=str(OUTPUT_ROOT / "sweep_postprocess_subset.json"),
+                        help="the <out>_subset.json written by sweep_postprocess.py")
     parser.add_argument("--annotations", default=str(TRAIN_ANNOTATIONS))
     parser.add_argument("--split", default=str(SPLIT_PATH))
     parser.add_argument("--out", default=None)
     args = parser.parse_args()
 
     annotations = load_annotations(args.annotations)
-    split = json.loads(Path(args.split).read_text(encoding="utf-8"))
-    all_ids = deduplicate_by_file(annotations, split["val"])
-    used = sweep_subset(all_ids, args.sweep_images, args.seed)
+    val_ids = load_split(args.split)["val"]
+    subset = json.loads(Path(args.sweep_subset).read_text(encoding="utf-8"))
+    tuned = set(subset["tune_stems"])
+    all_stems = stems_of(annotations, val_ids)
     groups = {
-        "held out from the sweep": [i for i in all_ids if i not in used],
-        "used by the sweep": [i for i in all_ids if i in used],
-        "all validation": all_ids,
+        "held out from the sweep": [s for s in all_stems if s not in tuned],
+        "used by the sweep": [s for s in all_stems if s in tuned],
+        "all validation": all_stems,
     }
-    print(f"validation observations: {len(all_ids)} "
+    print(f"validation observations: {len(all_stems)} "
           f"({len(groups['used by the sweep'])} used by the sweep, "
           f"{len(groups['held out from the sweep'])} held out)\n")
 
@@ -71,17 +69,17 @@ def main() -> None:
     for path in args.submission:
         by_stem = read_submission(path)
         results[path] = {}
-        for group, ids in groups.items():
-            gt = annotations.gt_dict(ids)
-            pred = {i: by_stem.get(annotations.images[i].stem, []) for i in ids}
+        for group, stems in groups.items():
+            if not stems:
+                continue
+            views = records_for_stems(annotations, val_ids, stems)
+            gt = annotations.gt_dict(views)
+            pred = {i: by_stem.get(annotations.images[i].stem, []) for i in views}
             summary, _ = evaluate(gt, pred)
-            results[path][group] = {
-                key: summary[key]
-                for key in ("pq_pooled", "pq_per_image_mean", "sq", "rq", "tp", "fp", "fn",
-                            "one_to_many", "many_to_one", "n_images")
-            }
+            results[path][group] = {key: summary[key] for key in SUMMARY_KEYS}
 
-    header = f"{'submission':<34} {'group':<25} {'PQ pooled':>9} {'per-image':>9} {'SQ':>6} {'RQ':>6} {'split up':>8}"
+    header = (f"{'submission':<34} {'group':<25} {'PQ pooled':>9} {'per-view':>9} "
+              f"{'SQ':>6} {'RQ':>6} {'split up':>8}")
     print(header)
     print("-" * len(header))
     for path, by_group in results.items():
@@ -91,8 +89,8 @@ def main() -> None:
                   f"{r['one_to_many']:>8}")
 
     out = Path(args.out or (ensure_output_dir() / "holdout_comparison.json"))
-    out.write_text(json.dumps({"sweep_images": args.sweep_images, "seed": args.seed,
-                               "results": results}, indent=2), encoding="utf-8")
+    out.write_text(json.dumps({"sweep_subset": args.sweep_subset, "results": results},
+                              indent=2), encoding="utf-8")
     print(f"\nwrote {out}")
 
 

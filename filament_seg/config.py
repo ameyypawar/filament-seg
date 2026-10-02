@@ -26,6 +26,10 @@ TEST_IMAGE_DIR = DATA_ROOT / "test" / "test_images"
 
 SPLIT_PATH = OUTPUT_ROOT / "splits.json"
 
+#: Preprocessing cache (flattened images, masks, disk geometry) that
+#: scripts/preprocess.py builds and every other script reads.
+CACHE_DIR = REPO_ROOT / "data" / "cache"
+
 # --- Dataset constants ------------------------------------------------------
 
 #: All GONG H-alpha observations in this competition are 2048x2048 grayscale.

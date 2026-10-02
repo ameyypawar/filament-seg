@@ -24,25 +24,27 @@ from pathlib import Path as _Path
 sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
 
 import argparse
-import json
 import time
 from pathlib import Path
 
-import cv2
-import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from filament_seg.config import REPO_ROOT, SPLIT_PATH, TRAIN_ANNOTATIONS
-from filament_seg.data import Annotations, deduplicate_by_file, load_annotations
-from filament_seg.dataset import FilamentCrops, load_disk_geometry
+from filament_seg.config import CACHE_DIR, REPO_ROOT, SPLIT_PATH, TRAIN_ANNOTATIONS
+from filament_seg.data import (
+    Annotations,
+    deduplicate_by_file,
+    load_annotations,
+    load_split,
+    records_for_stems,
+    sample_stems,
+)
+from filament_seg.dataset import FilamentCrops, load_disk_geometry, load_model_input
 from filament_seg.disk import Disk
 from filament_seg.metrics import evaluate_image, summarize
 from filament_seg.model import DiceBCELoss, build_model, select_device, tiled_predict
-from filament_seg.postprocess import PostprocessParams, binary_to_instances
+from filament_seg.postprocess import PostprocessParams, logits_to_instances
 from filament_seg.rle import labels_to_rles
-
-DEFAULT_CACHE_DIR = REPO_ROOT / "data" / "cache"
 
 #: Validation tiling knobs are fixed rather than exposed as flags: they must
 #: match what scripts/predict.py will actually submit with, or "best val PQ"
@@ -50,40 +52,37 @@ DEFAULT_CACHE_DIR = REPO_ROOT / "data" / "cache"
 VAL_TILE = 512
 VAL_OVERLAP = 128
 
+#: Fixed independently of --seed, so retraining with another seed is still
+#: judged on the same observations. sweep_postprocess.py samples with the same
+#: seed, so these are always a subset of the sweep's tuning observations and
+#: never touch the held-out half used to judge the final result.
+VAL_SAMPLE_SEED = 0
+
 
 def run_validation(
     model: torch.nn.Module,
-    val_ids: list[str],
+    views_by_stem: dict[str, list[str]],
     annotations: Annotations,
     disk_geometry: dict[str, Disk],
     flat_dir: Path,
     device: torch.device,
     postprocess_params: PostprocessParams,
 ) -> dict:
+    """Predict each observation once and score it against every annotator's view."""
     model.eval()
     results = []
-    for image_id in val_ids:
-        record = annotations.images[image_id]
-        stem = record.stem
-        shape = (record.height, record.width)
-
-        flat_u8 = cv2.imread(str(flat_dir / f"{stem}.png"), cv2.IMREAD_GRAYSCALE)
-        if flat_u8 is None:
+    for stem, image_ids in views_by_stem.items():
+        disk = disk_geometry[stem]
+        x = load_model_input(flat_dir, stem, disk)
+        if x is None:
             print(f"  warning: no cached flat image for {stem}, skipping")
             continue
 
-        disk = disk_geometry[stem]
-        radius = disk.radius_map(shape).astype(np.float32)
-        x = np.stack([flat_u8.astype(np.float32) / 255.0, radius], axis=0)
-
         logits = tiled_predict(model, x, tile=VAL_TILE, overlap=VAL_OVERLAP, device=device)
-        disk_mask = disk.mask(shape)
-        binary = ((logits > 0.0) & disk_mask).astype(np.uint8)  # logit > 0 <=> prob > 0.5
-        labels = binary_to_instances(binary, postprocess_params, restrict_to=disk_mask)
-
+        labels = logits_to_instances(logits, disk.mask(logits.shape), postprocess_params)
         pred_rles = labels_to_rles(labels)
-        gt_rles = annotations.gt_rles(image_id)
-        results.append(evaluate_image(image_id, gt_rles, pred_rles))
+        for image_id in image_ids:
+            results.append(evaluate_image(image_id, annotations.gt_rles(image_id), pred_rles))
 
     return summarize(results)
 
@@ -99,9 +98,10 @@ def main() -> None:
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--split", default=str(SPLIT_PATH))
     parser.add_argument("--out", default=str(REPO_ROOT / "outputs" / "model_best.pt"))
-    parser.add_argument("--limit-val", type=int, default=24)
+    parser.add_argument("--limit-val", type=int, default=24,
+                        help="validation observations scored after every epoch")
     parser.add_argument("--annotations", default=str(TRAIN_ANNOTATIONS))
-    parser.add_argument("--cache-dir", default=str(DEFAULT_CACHE_DIR))
+    parser.add_argument("--cache-dir", default=str(CACHE_DIR))
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
         "--target",
@@ -116,12 +116,15 @@ def main() -> None:
     print(f"device: {device}")
 
     annotations = load_annotations(args.annotations)
-    split = json.loads(Path(args.split).read_text(encoding="utf-8"))
+    split = load_split(args.split)
     train_ids = deduplicate_by_file(annotations, split["train"], seed=args.seed)
-    # Sorted (not shuffled) so the same subset is scored every epoch -- the
-    # point is a stable trend, not a representative sample.
-    val_ids = deduplicate_by_file(annotations, split["val"], seed=args.seed)[: args.limit_val]
-    print(f"train observations: {len(train_ids)}  val observations (capped): {len(val_ids)}")
+    val_stems = sample_stems(annotations, split["val"], args.limit_val, seed=VAL_SAMPLE_SEED)
+    val_views = records_for_stems(annotations, split["val"], val_stems)
+    views_by_stem = {
+        stem: [i for i in val_views if annotations.images[i].stem == stem] for stem in val_stems
+    }
+    print(f"train observations: {len(train_ids)}  val observations (capped): "
+          f"{len(val_stems)} ({len(val_views)} annotator views)")
 
     cache_dir = Path(args.cache_dir)
     disk_geometry = load_disk_geometry(cache_dir / "disk.json")
@@ -196,7 +199,7 @@ def main() -> None:
         train_loss = running_loss / max(n_seen, 1)
 
         val_summary = run_validation(
-            model, val_ids, annotations, disk_geometry, cache_dir / "flat", device,
+            model, views_by_stem, annotations, disk_geometry, cache_dir / "flat", device,
             postprocess_params,
         )
         val_pq = val_summary.get("pq_pooled", 0.0)

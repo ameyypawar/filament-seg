@@ -12,14 +12,19 @@ there is only Apple MPS, where the same training takes about four and a half
 hours; a Kaggle GPU does it in a fraction of that.
 
 TARGET and TTA below select the experiment. Run 1 (annotator labels, no TTA)
-scored 0.30 public, 0.32 once 8-orientation TTA was added locally; this
-configuration trains on the consensus of all annotators and applies the same
-TTA on the GPU, so its result is directly comparable to that 0.32.
+scored 0.30 public, 0.32 once 8-orientation TTA was added locally; run 2
+(consensus labels) matched it within noise on held-out validation. This run
+repeats run 1's set-up on the corrected pipeline: the disk is now found at the
+true limb (the old detector sat on the halo, about 35 px outside it), the best
+epoch is picked on observations from every annotator batch, and every score
+pools all annotators' views, as the competition does. Keeping run 1's labels
+means any difference from 0.32 comes from those fixes.
 
 Large intermediates (the preprocessing cache, cached logits) live under /tmp so
-they are not saved as notebook output. Only what is worth keeping is copied to
-/kaggle/working, and the checkpoint is copied the moment training finishes, so
-a failure in any later stage can never cost the trained model.
+they are not saved as notebook output. The checkpoints are written straight to
+/kaggle/working by train.py after every epoch, so neither a crash in a later
+stage nor one in the last epochs of training (out of memory, the session time
+limit) can cost the best model trained so far.
 """
 
 from __future__ import annotations
@@ -41,10 +46,9 @@ KEEP = Path("/kaggle/working")
 
 EPOCHS = 30
 BATCH_SIZE = 16
-#: "consensus" trains against the per-observation average of every annotator's
-#: mask instead of one arbitrarily chosen annotator (inter-annotator PQ is only
-#: 0.34, so a single annotator's labels carry a lot of personal noise).
-TARGET = "consensus"
+#: "annotator" trains on one annotator's view per observation, as run 1 did;
+#: "consensus" trains on the per-observation average of every annotator's mask.
+TARGET = "annotator"
 #: Test-time augmentation for the sweep and the final predictions: all eight
 #: orientations, which is what lifted run 1 from 0.30 to 0.32 public.
 TTA = "dihedral"
@@ -52,22 +56,29 @@ TTA = "dihedral"
 LIMIT_VAL = 48
 #: Half of the 144 validation observations; the other half judges the result.
 SWEEP_IMAGES = 72
-#: Centred on what won with TTA in run 1 (threshold 0.7, open 0, bridge 16),
-#: with the threshold range widened: soft consensus targets change how the
-#: model's probabilities are calibrated, so the best cut-off may move.
+#: Centred on what won for run 1 under the competition's scoring (threshold
+#: 0.7, min area 400, bridge 16, close 3, open 0), which a 144-point sweep on
+#: 2026-10-02 confirmed: smaller and larger areas, wider bridges and a
+#: confidence filter all scored lower. A new model's calibration can move the
+#: best cut-off, so the threshold and area still get some room.
 SWEEP_GRID = {
-    "--threshold": ["0.4", "0.5", "0.6", "0.7", "0.8"],
-    "--min-area": ["400"],
-    "--bridge-gap": ["12", "16"],
+    "--threshold": ["0.5", "0.6", "0.7", "0.8"],
+    "--min-area": ["300", "400", "600"],
+    "--bridge-gap": ["12", "16", "24"],
     "--close-radius": ["3"],
-    "--open-radius": ["0", "1"],
+    "--open-radius": ["0"],
 }
-#: PostprocessParams defaults plus the 0.5 probability threshold; the baseline
-#: every tuned setting has to beat.
-DEFAULTS = {"threshold": 0.5, "min_area": 400, "bridge_gap": 12,
-            "close_radius": 5, "open_radius": 2}
+#: The settings that produced the best public score so far (0.32, run 1 with
+#: TTA). The sweep reports every candidate's held-out difference from these.
+BASELINE = "threshold=0.7,min_area=400,bridge_gap=16,close_radius=3,open_radius=0"
+#: Post-processing settings the sweep may hand to predict.py.
+SETTINGS = ("threshold", "min_area", "bridge_gap", "close_radius", "open_radius",
+            "min_confidence")
 
 STATUS: dict[str, str] = {}
+#: Everything run_summary.json reports, accumulated so later writes add to the
+#: environment report instead of replacing it.
+SUMMARY: dict = {}
 
 
 def log(message: str) -> None:
@@ -139,7 +150,8 @@ def environment_report() -> dict:
                     "cuda_available": torch.cuda.is_available(),
                     "device_count": torch.cuda.device_count()}
     smi = shutil.which("nvidia-smi")
-    report["nvidia_smi"] = (subprocess.run([smi, "-L"], capture_output=True, text=True)
+    report["nvidia_smi"] = (subprocess.run([smi, "-L"], capture_output=True, text=True,
+                                           timeout=60)
                             .stdout.strip() or "present, lists no devices") if smi else "not installed"
     if torch.cuda.device_count():
         major, minor = torch.cuda.get_device_capability(0)
@@ -162,8 +174,9 @@ def environment_report() -> dict:
 
 
 def write_summary(**extra) -> None:
+    SUMMARY.update(extra, stages=STATUS)
     (KEEP / "run_summary.json").write_text(
-        json.dumps({"stages": STATUS, **extra}, indent=2, default=str), encoding="utf-8")
+        json.dumps(SUMMARY, indent=2, default=str), encoding="utf-8")
 
 
 def main() -> None:
@@ -206,30 +219,36 @@ def main() -> None:
     # --- 1. cache, split, train: everything after depends on these -------------
     run([py, "scripts/preprocess.py", "--workers", workers], env)
     run([py, "scripts/make_splits.py", "--group-by", "date"], env)
-    checkpoint = OUT / "model_best.pt"
+    checkpoint = KEEP / "model_best.pt"
     started = time.time()
-    run([py, "scripts/train.py", "--epochs", EPOCHS, "--batch-size", BATCH_SIZE,
+    trained = attempt("train", lambda: run(
+        [py, "scripts/train.py", "--epochs", EPOCHS, "--batch-size", BATCH_SIZE,
          "--workers", workers, "--limit-val", LIMIT_VAL, "--target", TARGET,
          "--out", checkpoint],
-        env, log_to=OUT / "train.log")
-    STATUS["train"] = f"ok ({(time.time() - started) / 60:.0f} min)"
-    keep(checkpoint, OUT / "model_best_last.pt", OUT / "train.log", OUT / "splits.json")
+        env, log_to=OUT / "train.log"))
+    keep(OUT / "train.log", OUT / "splits.json")
+    if trained:
+        STATUS["train"] = f"ok ({(time.time() - started) / 60:.0f} min)"
     write_summary(commit=commit, gpu=gpu)
+    if not checkpoint.exists():
+        raise SystemExit("training produced no checkpoint; nothing to tune or predict")
 
     # --- 2. tune post-processing on half of the validation observations -------
     def sweep() -> None:
         args = [py, "scripts/sweep_postprocess.py", "--checkpoint", checkpoint,
                 "--device", "cuda", "--n-images", SWEEP_IMAGES, "--workers", workers,
-                "--tta", TTA]
+                "--tta", TTA, "--holdout", "--baseline", BASELINE]
         for flag, values in SWEEP_GRID.items():
             args += [flag, *values]
         run(args, env, log_to=OUT / "sweep.log")
-        keep(OUT / "sweep_postprocess.json", OUT / "sweep.log")
+        keep(OUT / "sweep_postprocess.json", OUT / "sweep_postprocess_subset.json",
+             OUT / "sweep.log")
 
-    tuned = dict(DEFAULTS)
+    # With no tuned settings, predict.py uses PostprocessParams' own defaults.
+    tuned: dict = {}
     if attempt("sweep", sweep):
         best = json.loads((OUT / "sweep_postprocess.json").read_text())[0]
-        tuned = {key: best[key] for key in DEFAULTS}
+        tuned = {key: best[key] for key in SETTINGS}
         log(f"sweep winner: {tuned} (PQ {best['pq']:.4f} on the sweep's own images)")
 
     # --- 3. predict validation and test with the winning settings -------------
@@ -239,11 +258,10 @@ def main() -> None:
     name = f"{TARGET}_{TTA}"
 
     def predict(subset: str, filename: str) -> None:
+        flags = [part for key, value in tuned.items()
+                 for part in (f"--{key.replace('_', '-')}", value)]
         run([py, "scripts/predict.py", "--checkpoint", checkpoint, "--subset", subset,
-             "--tta", TTA,
-             "--threshold", tuned["threshold"], "--min-area", tuned["min_area"],
-             "--bridge-gap", tuned["bridge_gap"], "--close-radius", tuned["close_radius"],
-             "--open-radius", tuned["open_radius"], "--out", OUT / filename], env)
+             "--tta", TTA, *flags, "--out", OUT / filename], env)
         keep(OUT / filename)
 
     attempt("predict val", lambda: predict("val", f"val_{name}.csv"))
@@ -251,14 +269,14 @@ def main() -> None:
 
     # --- 4. score it on the half the sweep never saw ---------------------------
     def compare() -> None:
-        run([py, "scripts/compare_holdout.py", "--sweep-images", SWEEP_IMAGES,
+        run([py, "scripts/compare_holdout.py",
+             "--sweep-subset", OUT / "sweep_postprocess_subset.json",
              "--out", OUT / "holdout_comparison.json",
              "--submission", OUT / f"val_{name}.csv"], env, log_to=OUT / "holdout.log")
         keep(OUT / "holdout_comparison.json", OUT / "holdout.log")
 
     attempt("holdout comparison", compare)
-    write_summary(commit=commit, gpu=gpu, epochs=EPOCHS, target=TARGET, tta=TTA,
-                  defaults=DEFAULTS, tuned=tuned)
+    write_summary(epochs=EPOCHS, target=TARGET, tta=TTA, baseline=BASELINE, tuned=tuned)
     log(f"done: {STATUS}")
 
 

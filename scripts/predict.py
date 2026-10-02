@@ -20,113 +20,96 @@ from pathlib import Path as _Path
 sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
 
 import argparse
-import json
 from pathlib import Path
 
-import cv2
-import numpy as np
-
-from filament_seg.config import REPO_ROOT, SPLIT_PATH, TRAIN_ANNOTATIONS, ensure_output_dir
-from filament_seg.data import deduplicate_by_file, load_annotations
-from filament_seg.dataset import load_disk_geometry
+from filament_seg.config import (
+    CACHE_DIR,
+    SPLIT_PATH,
+    TEST_IMAGE_DIR,
+    TRAIN_ANNOTATIONS,
+    ensure_output_dir,
+)
+from filament_seg.data import load_annotations, load_split, stems_of, test_image_paths
+from filament_seg.dataset import load_disk_geometry, load_model_input
 from filament_seg.model import TTA_MODES, ensemble_predict, load_trained, select_device
-from filament_seg.postprocess import PostprocessParams, binary_to_instances
+from filament_seg.postprocess import PostprocessParams, logits_to_instances
 from filament_seg.rle import build_submission, labels_to_rles, write_submission
-
-DEFAULT_CACHE_DIR = REPO_ROOT / "data" / "cache"
-
-
-def _logit(p: float) -> float:
-    if p <= 0.0:
-        return -1e9
-    if p >= 1.0:
-        return 1e9
-    return float(np.log(p / (1.0 - p)))
 
 
 def resolve_stems(args: argparse.Namespace) -> list[str]:
     if args.subset == "test":
-        # Every cached stem that isn't an annotated (train) observation is a
-        # test one -- walking the flat cache avoids re-globbing raw JPEGs.
-        annotations = load_annotations(args.annotations)
-        train_stems = set(annotations.by_file_stem())
-        flat_dir = Path(args.cache_dir) / "flat"
-        return sorted(p.stem for p in flat_dir.glob("*.png") if p.stem not in train_stems)
-
+        # The test folder itself, not the preprocessing cache, defines what
+        # must be predicted: an image missing from a partial cache would
+        # otherwise drop out of the submission and cost all its filaments.
+        return sorted(p.stem for p in test_image_paths(TEST_IMAGE_DIR))
     annotations = load_annotations(args.annotations)
-    split = json.loads(Path(args.split).read_text(encoding="utf-8"))
-    image_ids = deduplicate_by_file(annotations, split["val"])
-    return sorted({annotations.images[i].stem for i in image_ids})
+    return stems_of(annotations, load_split(args.split)["val"])
 
 
 def main() -> None:
+    defaults = PostprocessParams()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint", nargs="+", required=True,
                         help="one or more checkpoints; several are averaged as an ensemble")
     parser.add_argument("--subset", choices=["test", "val"], default="test")
     parser.add_argument("--tile", type=int, default=512)
     parser.add_argument("--overlap", type=int, default=128)
-    parser.add_argument("--threshold", type=float, default=0.5)
-    parser.add_argument("--min-area", type=int, default=400)
-    parser.add_argument("--bridge-gap", type=int, default=12)
-    # sweep_postprocess.py tunes these two as well; without them here, whatever
-    # it found could not be applied to the submission.
-    parser.add_argument("--open-radius", type=int, default=2)
-    parser.add_argument("--close-radius", type=int, default=5)
+    # Every post-processing knob sweep_postprocess.py tunes must be settable
+    # here, or what it finds could not be applied to the submission.
+    parser.add_argument("--threshold", type=float, default=defaults.threshold)
+    parser.add_argument("--min-area", type=int, default=defaults.min_area)
+    parser.add_argument("--bridge-gap", type=int, default=defaults.bridge_gap)
+    parser.add_argument("--open-radius", type=int, default=defaults.open_radius)
+    parser.add_argument("--close-radius", type=int, default=defaults.close_radius)
+    parser.add_argument("--min-confidence", type=float, default=defaults.min_confidence)
     parser.add_argument("--limit", type=int, default=0, help="debug: first N observations")
     parser.add_argument("--tta", choices=list(TTA_MODES), default="none",
                         help="average logits over flipped/rotated copies of each image")
     parser.add_argument("--out", default=None)
     parser.add_argument("--annotations", default=str(TRAIN_ANNOTATIONS))
     parser.add_argument("--split", default=str(SPLIT_PATH))
-    parser.add_argument("--cache-dir", default=str(DEFAULT_CACHE_DIR))
+    parser.add_argument("--cache-dir", default=str(CACHE_DIR))
     args = parser.parse_args()
-
-    device = select_device()
-    print(f"device: {device}")
-
-    models = [load_trained(path, device) for path in args.checkpoint]
-    print(f"models: {len(models)} ({', '.join(args.checkpoint)})")
-
-    cache_dir = Path(args.cache_dir)
-    disk_geometry = load_disk_geometry(cache_dir / "disk.json")
-    flat_dir = cache_dir / "flat"
 
     stems = resolve_stems(args)
     if args.limit:
         stems = stems[: args.limit]
     if not stems:
+        raise SystemExit(f"no {args.subset} observations found")
+
+    cache_dir = Path(args.cache_dir)
+    disk_geometry = load_disk_geometry(cache_dir / "disk.json")
+    flat_dir = cache_dir / "flat"
+    uncached = [s for s in stems if s not in disk_geometry or not (flat_dir / f"{s}.png").exists()]
+    if uncached:
         raise SystemExit(
-            "no observations found for this subset -- has scripts/preprocess.py run?"
+            f"{len(uncached)}/{len(stems)} {args.subset} observations are missing from the "
+            f"preprocessing cache (e.g. {uncached[:3]}) -- run scripts/preprocess.py"
         )
+
+    device = select_device()
+    print(f"device: {device}")
+    models = [load_trained(path, device) for path in args.checkpoint]
+    print(f"models: {len(models)} ({', '.join(args.checkpoint)})")
     print(f"predicting {len(stems)} {args.subset} observations")
 
-    postprocess_params = PostprocessParams(
+    params = PostprocessParams(
+        threshold=args.threshold,
         min_area=args.min_area,
         bridge_gap=args.bridge_gap,
         open_radius=args.open_radius,
         close_radius=args.close_radius,
+        min_confidence=args.min_confidence,
     )
-    print(f"post-processing: threshold={args.threshold} tta={args.tta} {postprocess_params}")
-    threshold_logit = _logit(args.threshold)
+    print(f"post-processing: tta={args.tta} {params}")
 
     predictions: dict[str, list] = {}
     for n, stem in enumerate(stems, start=1):
-        flat_u8 = cv2.imread(str(flat_dir / f"{stem}.png"), cv2.IMREAD_GRAYSCALE)
-        if flat_u8 is None:
-            print(f"  warning: no cached flat image for {stem}, skipping")
-            continue
-
         disk = disk_geometry[stem]
-        shape = flat_u8.shape
-        radius = disk.radius_map(shape).astype(np.float32)
-        x = np.stack([flat_u8.astype(np.float32) / 255.0, radius], axis=0)
-
+        x = load_model_input(flat_dir, stem, disk)
         logits = ensemble_predict(models, x, tta=args.tta, tile=args.tile,
                                   overlap=args.overlap, device=device)
-        disk_mask = disk.mask(shape)
-        binary = ((logits > threshold_logit) & disk_mask).astype(np.uint8)
-        labels = binary_to_instances(binary, postprocess_params, restrict_to=disk_mask)
+        labels = logits_to_instances(logits, disk.mask(logits.shape), params)
         predictions[stem] = labels_to_rles(labels)
 
         if n % 25 == 0 or n == len(stems):
@@ -140,7 +123,7 @@ def main() -> None:
     empty = sum(1 for v in predictions.values() if not v)
     print(
         f"\n{n_instances} instances over {len(predictions)} images "
-        f"({n_instances / max(len(predictions), 1):.2f} per image, {empty} empty)"
+        f"({n_instances / max(len(predictions), 1):.2f} per image, {empty} with none)"
     )
     print(f"wrote {out_path}")
 

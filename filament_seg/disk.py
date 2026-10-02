@@ -54,12 +54,171 @@ def read_image(path: str | Path) -> np.ndarray:
     return image
 
 
-def detect_disk(image: np.ndarray) -> Disk:
-    """Locate the solar disk.
+#: GONG H-alpha frames are usually registered to a standard geometry: the
+#: disk centred and about 0.439 frame-widths in radius (899 px at 2048). Many
+#: frames are not, so this is only one of several starting guesses.
+_STANDARD_RADIUS_FRACTION = 0.439
+#: Rays cast from a candidate centre when locating the limb.
+_N_RAYS = 720
+#: How far inside each starting guess to look as well, in px at 2048. The halo
+#: can reach 150 px beyond the limb, so a guess locked onto it needs this.
+_INWARD_OFFSETS = (0.0, 50.0, 100.0, 150.0)
+#: A ray "agrees" with a circle if its sharpest edge lies within this many px
+#: (at 2048) of it. Fixed, not data-adaptive, so scattered edges score low.
+_AGREEMENT_TOLERANCE = 3.0
+#: A circle counts as well supported if this fraction of the best circle's
+#: agreeing rays also agree with it.
+_SUPPORT_RATIO = 0.8
 
-    A full disk fills most of the frame, so thresholding the blurred image and
-    taking the largest connected component is more robust than a Hough circle
-    search (which is also far slower at 2048x2048).
+
+def detect_disk(image: np.ndarray) -> Disk:
+    """Locate the solar disk by its limb.
+
+    GONG frames carry a smooth "halo" annulus outside the limb -- scattered
+    light, and the area the frame covered before it was registered -- that can
+    be nearly as bright as the disk itself, and its outer border is a crisp
+    circle too. Thresholding the image, which this function used to rely on
+    alone, locks onto that border: about 35 px beyond the limb on a typical
+    frame and up to 150 px on the worst.
+
+    Instead, several starting circles (an intensity threshold, a texture
+    threshold -- the disk is textured, the halo smooth -- and the standard GONG
+    geometry), each also shrunk by up to 150 px, are snapped to the sharpest
+    radial edge nearby and scored by how many rays agree with the result. The
+    halo always lies outside the limb, so of the well-supported circles the
+    smallest is the limb.
+    """
+    scale = min(image.shape) / 2048.0
+    blurred = cv2.GaussianBlur(image.astype(np.float32), (0, 0), max(1.5 * scale, 0.8))
+    seeds = [_threshold_disk(image), _texture_disk(image), _standard_disk(image)]
+
+    fits: list[tuple[Disk, float]] = []
+    for seed in seeds:
+        if seed is None:
+            continue
+        for offset in _INWARD_OFFSETS:
+            start = Disk(seed.cx, seed.cy, seed.radius - offset * scale)
+            if start.radius <= 0:
+                continue
+            disk, _ = _refine_limb(blurred, start, inside=60.0, outside=20.0)
+            # A second, narrow pass lets the centre settle once the radius is close.
+            fits.append(_refine_limb(blurred, disk, inside=10.0, outside=10.0))
+
+    best_support = max((support for _, support in fits), default=0.0)
+    # Fewer than half the rays agreeing means nothing found a clean limb; the
+    # plain threshold circle is then the least surprising answer.
+    if best_support < 0.5:
+        return seeds[0]
+    supported = [disk for disk, support in fits if support >= _SUPPORT_RATIO * best_support]
+    return min(supported, key=lambda disk: disk.radius)
+
+
+def _fit_circle(xs: np.ndarray, ys: np.ndarray, iterations: int = 4) -> tuple[Disk, np.ndarray]:
+    """Least-squares (Kasa) circle fit, refitted without outliers.
+
+    Returns the circle and a boolean inlier mask over the input points.
+    """
+    keep = np.ones(xs.size, dtype=bool)
+    disk = Disk(0.0, 0.0, 1.0)
+    for _ in range(iterations):
+        if keep.sum() < 3:
+            break
+        design = np.column_stack([xs[keep], ys[keep], np.ones(int(keep.sum()))])
+        target = -(xs[keep] ** 2 + ys[keep] ** 2)
+        d, e, f = np.linalg.lstsq(design, target, rcond=None)[0]
+        cx, cy = -d / 2.0, -e / 2.0
+        disk = Disk(float(cx), float(cy), float(np.sqrt(max(cx * cx + cy * cy - f, 1.0))))
+        residual = np.hypot(xs - disk.cx, ys - disk.cy) - disk.radius
+        spread = 1.4826 * np.median(np.abs(residual[keep] - np.median(residual[keep])))
+        keep = np.abs(residual) <= max(3.0 * spread, 2.0)
+    return disk, keep
+
+
+def _refine_limb(
+    blurred: np.ndarray, start: Disk, inside: float, outside: float
+) -> tuple[Disk, float]:
+    """Snap ``start`` to the sharpest radial edge within the search band.
+
+    ``blurred`` is the lightly smoothed float image. Band lengths are in px at
+    2048 and scale with the frame, so the same code works on small test
+    images. Returns the refined circle and the fraction of all rays whose
+    sharpest edge lies within ``_AGREEMENT_TOLERANCE`` of it.
+    """
+    height, width = blurred.shape
+    scale = min(height, width) / 2048.0
+    theta = np.linspace(0.0, 2.0 * np.pi, _N_RAYS, endpoint=False)[:, None]
+    radii = np.arange(start.radius - inside * scale, start.radius + outside * scale + 1.0, 1.0)
+    map_x = (start.cx + radii[None, :] * np.cos(theta)).astype(np.float32)
+    map_y = (start.cy + radii[None, :] * np.sin(theta)).astype(np.float32)
+    profiles = cv2.remap(blurred, map_x, map_y, cv2.INTER_LINEAR,
+                         borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+    in_frame = (map_x >= 1) & (map_x <= width - 2) & (map_y >= 1) & (map_y <= height - 2)
+    gradient = np.abs(np.gradient(profiles, axis=1))
+    gradient[~in_frame] = -1.0
+    edge = np.argmax(gradient, axis=1)
+    valid = gradient[np.arange(_N_RAYS), edge] > 0
+    # A real edge is a peak inside the band. A maximum on the band's boundary
+    # is just the smooth limb-darkening slope rising toward it -- perfectly
+    # circular, so without this it would pass for a well-supported limb.
+    valid &= (edge > 1) & (edge < radii.size - 2)
+    if valid.sum() < 3:
+        return start, 0.0
+    # Sub-pixel peak position from a parabola through the peak and its two
+    # neighbours: the flattening downstream is sensitive to fractions of a
+    # pixel in the radius.
+    rows = np.flatnonzero(valid)
+    peak = edge[valid]
+    before, at, after = (gradient[rows, peak - 1], gradient[rows, peak],
+                         gradient[rows, peak + 1])
+    curvature = before - 2.0 * at + after
+    shift = np.divide(0.5 * (before - after), curvature,
+                      out=np.zeros_like(at), where=curvature < 0)
+    r = radii[peak] + np.clip(shift, -0.5, 0.5)
+    xs = start.cx + r * np.cos(theta[valid, 0])
+    ys = start.cy + r * np.sin(theta[valid, 0])
+    disk, _ = _fit_circle(xs, ys)
+    residual = np.hypot(xs - disk.cx, ys - disk.cy) - disk.radius
+    agreeing = np.abs(residual) <= max(_AGREEMENT_TOLERANCE * scale, 1.0)
+    return disk, float(agreeing.sum()) / _N_RAYS
+
+
+def _standard_disk(image: np.ndarray) -> Disk:
+    height, width = image.shape
+    return Disk((width - 1) / 2.0, height / 2.0, min(height, width) * _STANDARD_RADIUS_FRACTION)
+
+
+def _texture_disk(image: np.ndarray) -> Disk | None:
+    """Disk from local texture: chromospheric structure is busy, the halo smooth."""
+    scale = min(image.shape) / 2048.0
+    img = image.astype(np.float32)
+    detail = np.abs(img - cv2.GaussianBlur(img, (0, 0), max(3.0 * scale, 1.0)))
+    texture = cv2.GaussianBlur(detail, (0, 0), max(15.0 * scale, 2.0))
+    texture_u8 = np.clip(texture * (255.0 / max(float(texture.max()), 1e-6)), 0, 255)
+    _, binary = cv2.threshold(texture_u8.astype(np.uint8), 0, 1,
+                              cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    n_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
+    if n_labels <= 1:
+        return None
+    largest = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+    component = (labels == largest).astype(np.uint8)
+    # Fill the component's interior: smooth patches on the disk (and the whole
+    # interior of a texture-free test image) leave holes.
+    flood = component.copy()
+    cv2.floodFill(flood, np.zeros((flood.shape[0] + 2, flood.shape[1] + 2), np.uint8), (0, 0), 1)
+    component = component | (1 - flood)
+    contours, _ = cv2.findContours(component, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    points = max(contours, key=cv2.contourArea)[:, 0, :].astype(np.float64)
+    if len(points) < 3:
+        return None
+    disk, _ = _fit_circle(points[:, 0], points[:, 1])
+    return disk
+
+
+def _threshold_disk(image: np.ndarray) -> Disk:
+    """Disk from an intensity threshold: the brightest large component.
+
+    Reliable for the centre of a clean frame, but the halo annulus usually
+    passes the threshold too, so the radius it gives is an upper bound.
     """
     blurred = cv2.GaussianBlur(image, (0, 0), sigmaX=5)
     threshold, binary = cv2.threshold(

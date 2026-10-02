@@ -63,6 +63,20 @@ def load_disk_geometry(path: str | Path) -> dict[str, Disk]:
     return {stem: Disk(**geometry) for stem, geometry in raw.items()}
 
 
+def load_model_input(flat_dir: str | Path, stem: str, disk: Disk) -> np.ndarray | None:
+    """The 2-channel full-frame network input for one observation.
+
+    Channel 0 is the cached limb-darkening-flattened intensity in [0, 1],
+    channel 1 the normalised radius map. Returns None if the flat image is not
+    cached, so callers can decide whether that is fatal.
+    """
+    flat_u8 = cv2.imread(str(Path(flat_dir) / f"{stem}.png"), cv2.IMREAD_GRAYSCALE)
+    if flat_u8 is None:
+        return None
+    radius = disk.radius_map(flat_u8.shape).astype(np.float32)
+    return np.stack([flat_u8.astype(np.float32) / 255.0, radius], axis=0)
+
+
 def _instance_centroids(annotations: Annotations, image_id: str) -> list[tuple[float, float]]:
     """Bounding-box centre of each ground-truth filament in ``image_id``.
 
@@ -244,10 +258,13 @@ class FilamentCrops(Dataset):
         mask_path = self._mask_dir / f"{image_id}.png"
         mask = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
         if mask is None:
-            # No cached mask just means "no filaments annotated in this
-            # view" -- scripts/preprocess.py never writes all-zero PNGs for
-            # nothing, but an all-zero view is a valid (if rare) outcome.
-            return np.zeros(shape, dtype=np.uint8)
+            # Every one of the 1154 training views has at least one annotated
+            # filament, so a missing mask is always a cache fault (a --limit
+            # preprocessing run, a wiped directory). Treating it as "no
+            # filaments" would silently teach the model to predict nothing.
+            raise FileNotFoundError(
+                f"missing cached mask: {mask_path} -- run scripts/preprocess.py first"
+            )
         return (mask > 0).astype(np.uint8)
 
     def _sample_crop_origin(

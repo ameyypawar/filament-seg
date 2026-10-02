@@ -206,18 +206,24 @@ whether local gains track leaderboard gains, which the next submission tests.
   `requirements.txt`, one notebook reproducing the pipeline, Google form.
   Worth 30% of the score; start it in early November, not the last week.
 
-## Open questions
+## How the leaderboard scores
 
-- Is leaderboard PQ pooled over the test set or averaged per image? The
-  baseline's public score is 0.08 against local pooled 0.1245 and local
-  per-image 0.1093. Per-image is the closer of the two, but neither matches, so
-  this is still open (see the calibration note below).
-- Does the held-out ground truth use one annotator per observation, or a
-  consensus? Given inter-annotator PQ of 0.34, this materially changes what a
-  leaderboard score means.
-- How does the leaderboard's 0.55 cluster exist when human pairwise agreement is
-  0.34? Consensus ground truth would explain part of it; the organisers'
-  Aug 20 note about metric gaming suggests it does not explain all of it.
+The organisers' self-evaluation notebook
+(`kaggle.com/code/azimahmadzadeh/self-evaluation-notebook`) settles the
+questions this section used to list as open:
+
+- **Every annotator counts.** Each observation's predictions are matched
+  against every annotator's view of it separately (IoU > 0.5), and TP, FP and
+  FN are **pooled** over all views of all observations. There is no consensus
+  ground truth and no per-image averaging. `scripts/evaluate.py`,
+  `scripts/sweep_postprocess.py`, `scripts/compare_holdout.py` and training's
+  checkpoint selection all score this way.
+- **The 0.55 cluster is not a modelling result.** A public notebook embeds a
+  precomputed submission file and writes it out unchanged; dozens of teams
+  submitted it. All 180 test images are also in the public MAGFiLO 1.0 release
+  with their annotations, so leaderboard scores near the top are not
+  comparable to honest ones. This project never uses that release; the
+  organisers judge on more than the leaderboard.
 
 ## Data licence
 
