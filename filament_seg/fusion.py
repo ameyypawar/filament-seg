@@ -34,7 +34,9 @@ from .postprocess import (
     fill_holes,
     probability_to_logit,
 )
-from .rle import counts_to_mask
+from pycocotools import mask as mask_utils
+
+from .rle import counts_to_mask, rle_from_counts
 
 
 @dataclass(frozen=True)
@@ -161,3 +163,38 @@ def fuse(
     regions = grow_regions(detections, params.grow, logits.shape, params.min_score)
     return assign(binary, regions, params.min_score, params.min_area, params.keep_unclaimed,
                   params.unclaimed_gap)
+
+
+def merge_views(views: list[list[Detection]], iou_threshold: float = 0.5) -> list[Detection]:
+    """Merge detections from flipped copies of one image into one list.
+
+    ``views`` holds each copy's detections, already flipped back. Detections
+    from different copies that overlap with IoU above ``iou_threshold`` are
+    the same filament; it keeps the best member's mask and scores the
+    average over *all* copies, counting a copy that missed it as 0. A
+    filament the detector finds from every orientation keeps its confidence;
+    one it sees in a single orientation loses most of it.
+    """
+    pool = sorted(((det, view) for view, dets in enumerate(views) for det in dets),
+                  key=lambda item: -item[0].score)
+    if not pool:
+        return []
+    rles = [rle_from_counts(det.counts) for det, _ in pool]
+    ious = np.asarray(mask_utils.iou(rles, rles, [0] * len(rles)))
+    used = np.zeros(len(pool), dtype=bool)
+    merged = []
+    for i, (detection, view) in enumerate(pool):
+        if used[i]:
+            continue
+        used[i] = True
+        seen, total = {view}, detection.score
+        for j in np.argsort(-ious[i], kind="stable"):
+            if ious[i, j] <= iou_threshold:
+                break
+            if used[j] or pool[j][1] in seen:
+                continue
+            used[j] = True
+            seen.add(pool[j][1])
+            total += pool[j][0].score
+        merged.append(Detection(total / len(views), detection.counts))
+    return merged

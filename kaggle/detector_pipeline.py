@@ -13,6 +13,7 @@ cannot cost the run.
 
 from __future__ import annotations
 
+import argparse
 import os
 import subprocess
 import sys
@@ -22,23 +23,34 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import train_on_kaggle as k  # noqa: E402
 
-#: Detector 1 (yolo11s-seg, 1024 px, 60 epochs) lifted held-out PQ by +0.037
-#: and the public score from 0.32 to 0.36; its validation mAP was still
-#: creeping up at the end. Detector 2 is bigger, sees finer detail and trains
-#: longer.
-MODEL = "yolo11m-seg.pt"
-IMGSZ = 1280
-EPOCHS = 80
-#: Total across both GPUs (Ultralytics splits it per device).
-BATCH = 8
-#: Both T4s; if distributed training fails, one GPU is tried from scratch.
-DEVICES = "0,1"
+#: Detector settings come from kaggle/detector/run.py's command line, so each
+#: new detector is a one-line change there. Defaults are detector 2's
+#: (yolo11m-seg, 1280 px, 80 epochs): detector 1 (yolo11s-seg, 1024 px, 60
+#: epochs) lifted held-out PQ by +0.037, detector 2 by +0.045, and the two
+#: combined by +0.051.
+DEFAULTS = {"model": "yolo11m-seg.pt", "imgsz": 1280, "epochs": 80,
+            #: Total across all GPUs (Ultralytics splits it per device).
+            "batch": 8,
+            #: Both T4s; if distributed training fails, one GPU is tried from scratch.
+            "devices": "0,1", "seed": 0}
 #: Pinned below the next major version: the training and prediction calls
 #: were written against the 8.x API.
 ULTRALYTICS = "ultralytics>=8.3,<9"
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--model", default=DEFAULTS["model"])
+    parser.add_argument("--imgsz", type=int, default=DEFAULTS["imgsz"])
+    parser.add_argument("--epochs", type=int, default=DEFAULTS["epochs"])
+    parser.add_argument("--batch", type=int, default=DEFAULTS["batch"])
+    parser.add_argument("--devices", default=DEFAULTS["devices"])
+    parser.add_argument("--seed", type=int, default=DEFAULTS["seed"])
+    return parser.parse_args()
+
+
 def main() -> None:
+    args = parse_args()
     k.KEEP.mkdir(parents=True, exist_ok=True)
     k.OUT.mkdir(parents=True, exist_ok=True)
 
@@ -64,7 +76,7 @@ def main() -> None:
     workers = min(4, os.cpu_count() or 2)
     py = sys.executable
     k.write_summary(commit=commit, gpu=gpu, gpus=torch.cuda.device_count(), ultralytics=version,
-                    model=MODEL, imgsz=IMGSZ, epochs=EPOCHS, batch=BATCH, devices=DEVICES)
+                    **vars(args))
 
     k.run([py, "scripts/preprocess.py", "--workers", workers], env)
     k.run([py, "scripts/make_splits.py", "--group-by", "date"], env)
@@ -77,11 +89,12 @@ def main() -> None:
     def train(devices: str) -> bool:
         return k.attempt(f"train detector on {devices}", lambda: k.run(
             [py, "scripts/train_detector.py", "--data", yolo_dir / "data.yaml",
-             "--out", detector_dir, "--model", MODEL, "--imgsz", IMGSZ, "--epochs", EPOCHS,
-             "--batch", BATCH, "--device", devices, "--workers", workers, "--patience", 25],
+             "--out", detector_dir, "--model", args.model, "--imgsz", args.imgsz,
+             "--epochs", args.epochs, "--batch", args.batch, "--device", devices,
+             "--workers", workers, "--patience", 25, "--seed", args.seed],
             env, log_to=k.OUT / f"detector_train_{devices.replace(',', '')}.log"))
 
-    if not train(DEVICES) and DEVICES != "0":
+    if not train(args.devices) and args.devices != "0":
         train("0")
     k.keep(*k.OUT.glob("detector_train_*.log"))
     weights = detector_dir / "detector_best.pt"
@@ -96,7 +109,7 @@ def main() -> None:
         out = k.OUT / f"detections_{subset}.json"
         k.attempt(f"detect {subset}", lambda s=subset, o=out: k.run(
             [py, "scripts/yolo_predict.py", "--weights", weights, "--subset", s,
-             "--imgsz", IMGSZ, "--device", "0", "--out", o], env))
+             "--imgsz", args.imgsz, "--device", "0", "--out", o], env))
         k.keep(out)
 
     k.write_summary(weights=str(weights))

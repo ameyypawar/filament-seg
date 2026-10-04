@@ -31,6 +31,7 @@ def main() -> None:
     parser.add_argument("--device", default="0")
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--patience", type=int, default=20)
+    parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--fraction", type=float, default=1.0, help="debug: train on a fraction")
     args = parser.parse_args()
 
@@ -41,7 +42,7 @@ def main() -> None:
     model.train(
         data=args.data, imgsz=args.imgsz, epochs=args.epochs, batch=args.batch,
         device=args.device, workers=args.workers, patience=args.patience,
-        project=str(out), name="train", exist_ok=True, seed=0, deterministic=False,
+        project=str(out), name="train", exist_ok=True, seed=args.seed, deterministic=False,
         single_cls=True, cos_lr=True, plots=False, fraction=args.fraction,
         mosaic=0.0, close_mosaic=0, mixup=0.0, copy_paste=0.0,
         fliplr=0.5, flipud=0.5, degrees=0.0, shear=0.0, perspective=0.0,

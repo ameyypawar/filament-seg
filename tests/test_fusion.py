@@ -4,7 +4,14 @@ from __future__ import annotations
 
 import numpy as np
 
-from filament_seg.fusion import Detection, FusionParams, assign, fuse, grow_regions
+from filament_seg.fusion import (
+    Detection,
+    FusionParams,
+    assign,
+    fuse,
+    grow_regions,
+    merge_views,
+)
 from filament_seg.rle import mask_to_counts
 
 SHAPE = (64, 64)
@@ -96,3 +103,18 @@ def test_fuse_applies_the_unet_threshold_and_disk():
     assert fuse(logits, disk, detections, params).max() == 1
     disk[:, :] = False
     assert fuse(logits, disk, detections, params).max() == 0
+
+
+def test_flipped_views_merge_into_one_detection_with_averaged_confidence():
+    same = [_detection(score, slice(10, 14), slice(5, 40)) for score in (0.8, 0.6, 0.7, 0.5)]
+    once = _detection(0.8, slice(40, 44), slice(5, 40))       # seen in one view only
+    merged = merge_views([[same[0], once], [same[1]], [same[2]], [same[3]]])
+    assert len(merged) == 2
+    scores = sorted(round(d.score, 3) for d in merged)
+    assert scores == [0.2, 0.65]                               # 0.8/4 and 2.6/4
+
+
+def test_two_detections_from_the_same_view_never_merge():
+    a = _detection(0.9, slice(10, 14), slice(5, 40))
+    b = _detection(0.8, slice(10, 14), slice(6, 40))           # near-duplicate, same view
+    assert len(merge_views([[a, b]])) == 2
