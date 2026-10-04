@@ -11,8 +11,13 @@ same logits, and every fusion candidate is reported as a paired-bootstrap
 difference from it. That comparison, not the tuning score, decides whether
 fusion is worth submitting.
 
-With ``--submission``, the best setting on the tuning half is applied to the
-test observations and written out as a submission CSV.
+The run is also cross-fitted: each half is scored with the setting the other
+half chose, so every validation observation is out-of-sample. ``--save-totals``
+keeps those per-observation totals, and scripts/compare_runs.py compares two
+pipelines on all 144 observations instead of 72.
+
+With ``--submission``, the setting that is best on all validation observations
+is applied to the test observations and written out as a submission CSV.
 
     python scripts/fuse_detections.py --checkpoint outputs/kaggle_v5/model_best.pt \\
         --cache-dir data/cache_v2 --logit-dir outputs/step3/logits_v5_dihedral \\
@@ -162,6 +167,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--overlap", type=int, default=128)
     parser.add_argument("--workers", type=int, default=0)
     parser.add_argument("--out", default=None, help="results JSON")
+    parser.add_argument("--save-totals", default=None,
+                        help="per-observation totals (.npz) for scripts/compare_runs.py")
     parser.add_argument("--submission", default=None, help="write the best setting's test CSV here")
     return parser.parse_args()
 
@@ -192,41 +199,68 @@ def main() -> None:
     grid = [FusionParams(**dict(zip(SWEPT, combo))) for combo in itertools.product(
         args.threshold, args.close_radius, args.grow, args.min_score, args.min_area,
         args.keep_unclaimed, args.unclaimed_gap)]
-    print(f"tuning on {len(tune)} observations x {len(grid)} fusion settings")
-    tune_totals = score_stems(tune, grid, views, gt, detections, disk_geometry, logit_dir,
-                              args.workers).sum(axis=0)
-    order = sorted(range(len(grid)), key=lambda i: -float(pq_of(tune_totals[i])))
-    print(f"\n{'setting':<78} {'PQ':>7} {'SQ':>6} {'TP':>5} {'FP':>5} {'FN':>5}")
+    # Every setting on both halves, so each half can tune for the other; the
+    # U-Net-only baseline rides along as the last column.
+    stems = tune + holdout
+    print(f"scoring {len(stems)} observations x {len(grid)} fusion settings")
+    per_stem = score_stems(stems, grid + [args.baseline], views, gt, detections, disk_geometry,
+                           logit_dir, args.workers)
+    half_a, half_b = np.arange(len(tune)), np.arange(len(tune), len(stems))
+    fused, base = per_stem[:, :-1], per_stem[:, -1]
+
+    def ranked(rows: np.ndarray) -> list[int]:
+        totals = fused[rows].sum(axis=0)
+        return sorted(range(len(grid)), key=lambda i: -float(pq_of(totals[i])))
+
+    order = ranked(half_a)
+    tune_totals = fused[half_a].sum(axis=0)
+    print(f"\ntuning half: {len(tune)} observations")
+    print(f"{'setting':<78} {'PQ':>7} {'SQ':>6} {'TP':>5} {'FP':>5} {'FN':>5}")
     for i in order[:15]:
         row = totals_row(tune_totals[i])
         print(f"{describe(grid[i]):<78} {row['pq']:>7.4f} {row['sq']:>6.3f} "
               f"{row['tp']:>5} {row['fp']:>5} {row['fn']:>5}")
 
-    candidates = [grid[i] for i in order[: args.holdout_top]] + [args.baseline]
-    per_stem = score_stems(holdout, candidates, views, gt, detections, disk_geometry,
-                           logit_dir, args.workers)
-    base = per_stem[:, -1]
     print(f"\nheld out from tuning: {len(holdout)} observations")
     report = []
-    for k, params in enumerate(candidates):
-        row = totals_row(per_stem[:, k].sum(axis=0))
-        entry = {"setting": describe(params), **row}
-        versus = "(baseline)"
-        if k < len(candidates) - 1:
-            delta, low, high = paired_bootstrap(per_stem[:, k], base, n_boot=5000)
-            entry.update(delta_vs_baseline=delta, ci_low=low, ci_high=high)
-            versus = f"{delta:+.4f} [{low:+.4f}, {high:+.4f}]"
-        print(f"{describe(params):<78} {row['pq']:>7.4f}  {versus}")
-        report.append(entry)
+    for i in order[: args.holdout_top]:
+        delta, low, high = paired_bootstrap(fused[half_b, i], base[half_b], n_boot=5000)
+        row = totals_row(fused[half_b, i].sum(axis=0))
+        report.append({"setting": describe(grid[i]), **row, "delta_vs_baseline": delta,
+                       "ci_low": low, "ci_high": high})
+        print(f"{describe(grid[i]):<78} {row['pq']:>7.4f}  {delta:+.4f} [{low:+.4f}, {high:+.4f}]")
+    row = totals_row(base[half_b].sum(axis=0))
+    report.append({"setting": describe(args.baseline), **row})
+    print(f"{describe(args.baseline):<78} {row['pq']:>7.4f}  (baseline)")
 
-    best = grid[order[0]]
+    # Cross-fitting: each half is scored with the setting the *other* half
+    # chose, so every observation is out-of-sample and a comparison between
+    # two pipelines rests on all of them rather than on one half.
+    best_a, best_b = order[0], ranked(half_b)[0]
+    crossfit = np.empty_like(base)
+    crossfit[half_b], crossfit[half_a] = fused[half_b, best_a], fused[half_a, best_b]
+    delta, low, high = paired_bootstrap(crossfit, base, n_boot=5000)
+    print(f"\ncross-fitted over all {len(stems)} observations: PQ {float(pq_of(crossfit.sum(axis=0))):.4f}"
+          f"  vs U-Net only {delta:+.4f} [{low:+.4f}, {high:+.4f}]")
+    print(f"  tuned on the held-out half: {describe(grid[best_b])}")
+
+    # A submission uses the setting that is best on every validation observation.
+    best = grid[ranked(np.arange(len(stems)))[0]]
     results = {"tune_top": [{"setting": describe(grid[i]), **totals_row(tune_totals[i])}
                             for i in order[:30]],
-               "holdout": report, "best": describe(best)}
+               "holdout": report, "best": describe(best),
+               "crossfit": {"pq": float(pq_of(crossfit.sum(axis=0))), "delta_vs_baseline": delta,
+                            "ci_low": low, "ci_high": high,
+                            "settings": [describe(grid[best_a]), describe(grid[best_b])]}}
     if args.out:
         Path(args.out).parent.mkdir(parents=True, exist_ok=True)
         Path(args.out).write_text(json.dumps(results, indent=2), encoding="utf-8")
         print(f"\nwrote {args.out}")
+    if args.save_totals:
+        Path(args.save_totals).parent.mkdir(parents=True, exist_ok=True)
+        np.savez(args.save_totals, stems=np.array(stems), crossfit=crossfit, baseline=base,
+                 holdout=fused[half_b, best_a], holdout_stems=np.array(holdout))
+        print(f"wrote {args.save_totals} (compare runs with scripts/compare_runs.py)")
 
     if args.submission:
         if not args.detections_test:

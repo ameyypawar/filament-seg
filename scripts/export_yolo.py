@@ -72,18 +72,24 @@ def main() -> None:
     parser.add_argument("--split", default=str(SPLIT_PATH))
     parser.add_argument("--cache-dir", default=str(CACHE_DIR))
     parser.add_argument("--limit", type=int, default=0, help="debug: first N views per subset")
+    parser.add_argument("--all-data", action="store_true",
+                        help="final detector: train on the validation views too; a few of them "
+                        "also stay in val, which Ultralytics requires but nothing then uses")
     args = parser.parse_args()
 
     annotations = load_annotations(args.annotations)
     split = load_split(args.split)
     flat_dir = Path(args.cache_dir) / "flat"
     out = Path(args.out).resolve()
+    subsets = {"train": split["train"], "val": split["val"]}
+    if args.all_data:
+        subsets = {"train": split["train"] + split["val"], "val": split["val"][:16]}
 
-    for subset in ("train", "val"):
+    for subset, all_views in subsets.items():
         image_dir, label_dir = out / "images" / subset, out / "labels" / subset
         image_dir.mkdir(parents=True, exist_ok=True)
         label_dir.mkdir(parents=True, exist_ok=True)
-        views = split[subset][: args.limit] if args.limit else split[subset]
+        views = all_views[: args.limit] if args.limit else all_views
         n_labels = 0
         for image_id in views:
             source = flat_dir / f"{annotations.images[image_id].stem}.png"

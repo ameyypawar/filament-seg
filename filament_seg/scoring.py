@@ -38,7 +38,17 @@ def pq_of(totals: np.ndarray) -> np.ndarray:
 def paired_bootstrap(
     per_stem_a: np.ndarray, per_stem_b: np.ndarray, n_boot: int = 2000, seed: int = 0
 ) -> tuple[float, float, float]:
-    """PQ(a) - PQ(b) on all observations, with a 95% interval from resampling them.
+    """PQ(a) - PQ(b) on all observations, with a 95% interval from resampling them."""
+    deltas = bootstrap_deltas(per_stem_a, per_stem_b, n_boot, seed)
+    full = float(pq_of(per_stem_a.sum(axis=0)) - pq_of(per_stem_b.sum(axis=0)))
+    low, high = np.percentile(deltas, [2.5, 97.5])
+    return full, float(low), float(high)
+
+
+def bootstrap_deltas(
+    per_stem_a: np.ndarray, per_stem_b: np.ndarray, n_boot: int = 2000, seed: int = 0
+) -> np.ndarray:
+    """PQ(a) - PQ(b) on ``n_boot`` resamples of the observations.
 
     Observations, not views, are resampled -- an observation's views share one
     set of predictions -- and both settings see the same resample each time.
@@ -47,8 +57,5 @@ def paired_bootstrap(
     weights = np.random.default_rng(seed).multinomial(n, np.full(n, 1.0 / n), size=n_boot)
     # einsum rather than `@`: macOS's Accelerate BLAS raises spurious
     # floating-point warnings in matmul, and this is far too small to need BLAS.
-    deltas = (pq_of(np.einsum("bs,sk->bk", weights, per_stem_a))
-              - pq_of(np.einsum("bs,sk->bk", weights, per_stem_b)))
-    full = float(pq_of(per_stem_a.sum(axis=0)) - pq_of(per_stem_b.sum(axis=0)))
-    low, high = np.percentile(deltas, [2.5, 97.5])
-    return full, float(low), float(high)
+    return (pq_of(np.einsum("bs,sk->bk", weights, per_stem_a))
+            - pq_of(np.einsum("bs,sk->bk", weights, per_stem_b)))

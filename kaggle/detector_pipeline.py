@@ -9,6 +9,13 @@ by scripts/fuse_detections.py against cached U-Net logits.
 The detector trains straight into /kaggle/working, where Ultralytics saves its
 best and last weights after every epoch, so a crash or the session time limit
 cannot cost the run.
+
+Both checkpoints predict: best.pt into detections_{val,test}.json, last.pt
+into detections_{val,test}_last.json. best.pt is the epoch Ultralytics scored
+highest on the validation views, a choice made on the data that later judges
+it; last.pt is not, and it is what an ``--all-data`` run (validation views in
+training, no early stopping) produces, so the final detectors are validated
+as last.pt.
 """
 
 from __future__ import annotations
@@ -46,6 +53,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch", type=int, default=DEFAULTS["batch"])
     parser.add_argument("--devices", default=DEFAULTS["devices"])
     parser.add_argument("--seed", type=int, default=DEFAULTS["seed"])
+    parser.add_argument("--all-data", action="store_true",
+                        help="final detector: train on the validation views too")
     return parser.parse_args()
 
 
@@ -82,37 +91,54 @@ def main() -> None:
     k.run([py, "scripts/make_splits.py", "--group-by", "date"], env)
     k.keep(k.OUT / "splits.json")
     yolo_dir = k.WORK / "yolo"
-    k.run([py, "scripts/export_yolo.py", "--out", yolo_dir], env)
+    k.run([py, "scripts/export_yolo.py", "--out", yolo_dir,
+           *(["--all-data"] if args.all_data else [])], env)
 
     detector_dir = k.KEEP / "detector"
+    # An all-data run has no validation views to stop early on.
+    schedule = ["--patience", 0, "--no-val"] if args.all_data else ["--patience", 25]
 
-    def train(devices: str) -> bool:
-        return k.attempt(f"train detector on {devices}", lambda: k.run(
+    def train(devices: str, batch: int) -> bool:
+        return k.attempt(f"train detector on {devices}, batch {batch}", lambda: k.run(
             [py, "scripts/train_detector.py", "--data", yolo_dir / "data.yaml",
              "--out", detector_dir, "--model", args.model, "--imgsz", args.imgsz,
-             "--epochs", args.epochs, "--batch", args.batch, "--device", devices,
-             "--workers", workers, "--patience", 25, "--seed", args.seed],
-            env, log_to=k.OUT / f"detector_train_{devices.replace(',', '')}.log"))
+             "--epochs", args.epochs, "--batch", batch, "--device", devices,
+             "--workers", workers, "--seed", args.seed, *schedule],
+            env, log_to=k.OUT / f"detector_train_{devices.replace(',', '')}_{batch}.log"))
 
-    if not train(args.devices) and args.devices != "0":
-        train("0")
+    # If distributed training fails, one GPU from scratch with the same batch
+    # per GPU; if that runs out of memory too, half of it.
+    for devices, batch in dict.fromkeys([(args.devices, args.batch),
+                                         ("0", max(2, args.batch // 2)),
+                                         ("0", max(2, args.batch // 4))]):
+        if train(devices, batch):
+            break
     k.keep(*k.OUT.glob("detector_train_*.log"))
-    weights = detector_dir / "detector_best.pt"
-    if not weights.exists():
-        # Training died part-way: fall back to the best epoch Ultralytics saved.
-        weights = detector_dir / "train" / "weights" / "best.pt"
-    if not weights.exists():
+
+    # suffix of the detections file -> weights. If training died part-way,
+    # train_detector.py never copied them, but Ultralytics' own copies remain.
+    checkpoints = {}
+    for name, suffix in (("best", ""), ("last", "_last")):
+        if args.all_data and name == "best":
+            continue
+        for weights in (detector_dir / f"detector_{name}.pt",
+                        detector_dir / "train" / "weights" / f"{name}.pt"):
+            if weights.exists():
+                checkpoints[suffix] = weights
+                break
+    if not checkpoints:
         k.write_summary()
         raise SystemExit("the detector produced no weights; nothing to predict")
 
-    for subset in ("val", "test"):
-        out = k.OUT / f"detections_{subset}.json"
-        k.attempt(f"detect {subset}", lambda s=subset, o=out: k.run(
-            [py, "scripts/yolo_predict.py", "--weights", weights, "--subset", s,
-             "--imgsz", args.imgsz, "--device", "0", "--out", o], env))
-        k.keep(out)
+    for suffix, weights in checkpoints.items():
+        for subset in ("val", "test"):
+            out = k.OUT / f"detections_{subset}{suffix}.json"
+            k.attempt(f"detect {subset}{suffix}", lambda s=subset, o=out, w=weights: k.run(
+                [py, "scripts/yolo_predict.py", "--weights", w, "--subset", s,
+                 "--imgsz", args.imgsz, "--device", "0", "--out", o], env))
+            k.keep(out)
 
-    k.write_summary(weights=str(weights))
+    k.write_summary(weights={suffix or "_best": str(w) for suffix, w in checkpoints.items()})
     k.log(f"done: {k.STATUS}")
 
 

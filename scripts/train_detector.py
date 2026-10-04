@@ -33,6 +33,8 @@ def main() -> None:
     parser.add_argument("--patience", type=int, default=20)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--fraction", type=float, default=1.0, help="debug: train on a fraction")
+    parser.add_argument("--no-val", action="store_true",
+                        help="skip per-epoch validation (final, all-data detectors)")
     args = parser.parse_args()
 
     from ultralytics import YOLO
@@ -43,20 +45,25 @@ def main() -> None:
         data=args.data, imgsz=args.imgsz, epochs=args.epochs, batch=args.batch,
         device=args.device, workers=args.workers, patience=args.patience,
         project=str(out), name="train", exist_ok=True, seed=args.seed, deterministic=False,
-        single_cls=True, cos_lr=True, plots=False, fraction=args.fraction,
+        single_cls=True, cos_lr=True, plots=False, fraction=args.fraction, val=not args.no_val,
         mosaic=0.0, close_mosaic=0, mixup=0.0, copy_paste=0.0,
         fliplr=0.5, flipud=0.5, degrees=0.0, shear=0.0, perspective=0.0,
         translate=0.05, scale=0.2, hsv_h=0.0, hsv_s=0.0, hsv_v=0.2,
         overlap_mask=True, mask_ratio=4,
     )
     run_dir = out / "train"
-    best = run_dir / "weights" / "best.pt"
-    if not best.exists():
-        raise SystemExit(f"training finished without {best}")
-    shutil.copy2(best, out / "detector_best.pt")
+    # best.pt is the epoch Ultralytics scored highest on the validation views,
+    # which makes it a choice made on validation data; last.pt is the end of
+    # the cosine schedule and the only checkpoint an all-data run can use.
+    for name in ("best", "last"):
+        weights = run_dir / "weights" / f"{name}.pt"
+        if weights.exists():
+            shutil.copy2(weights, out / f"detector_{name}.pt")
+            print(f"wrote {out / f'detector_{name}.pt'}")
+    if not (out / "detector_last.pt").exists():
+        raise SystemExit(f"training finished without {run_dir / 'weights' / 'last.pt'}")
     if (run_dir / "results.csv").exists():
         shutil.copy2(run_dir / "results.csv", out / "detector_results.csv")
-    print(f"wrote {out / 'detector_best.pt'}")
 
 
 if __name__ == "__main__":
