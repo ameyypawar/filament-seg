@@ -49,15 +49,24 @@ class DiceBCELoss(nn.Module):
     immune to how much background surrounds it; BCE is kept alongside it
     because Dice alone gives a noisy, sometimes unstable signal on crops with
     very few (or zero) positive pixels.
+
+    ``fn_weight`` turns the Dice term into a Tversky index: above 0.5, missed
+    filament pixels cost more than extra ones (Salehi et al., 2017). At 0.5,
+    the default, it is exactly soft Dice.
     """
 
     def __init__(
-        self, dice_weight: float = 1.0, bce_weight: float = 1.0, smooth: float = 1.0
+        self,
+        dice_weight: float = 1.0,
+        bce_weight: float = 1.0,
+        smooth: float = 1.0,
+        fn_weight: float = 0.5,
     ) -> None:
         super().__init__()
         self.dice_weight = dice_weight
         self.bce_weight = bce_weight
         self.smooth = smooth
+        self.fn_weight = fn_weight
         self.bce = nn.BCEWithLogitsLoss()
 
     def forward(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
@@ -66,8 +75,11 @@ class DiceBCELoss(nn.Module):
         probs = torch.sigmoid(logits).flatten(1)
         target_flat = target.flatten(1)
         intersection = (probs * target_flat).sum(dim=1)
-        union = probs.sum(dim=1) + target_flat.sum(dim=1)
-        dice = (2.0 * intersection + self.smooth) / (union + self.smooth)
+        false_pos = probs.sum(dim=1) - intersection
+        false_neg = target_flat.sum(dim=1) - intersection
+        denominator = (2.0 * intersection + 2.0 * (1.0 - self.fn_weight) * false_pos
+                       + 2.0 * self.fn_weight * false_neg)
+        dice = (2.0 * intersection + self.smooth) / (denominator + self.smooth)
         dice_loss = 1.0 - dice.mean()
 
         return self.dice_weight * dice_loss + self.bce_weight * bce_loss

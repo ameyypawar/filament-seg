@@ -37,8 +37,11 @@ class Disk:
 
     def radius_map(self, shape: tuple[int, int]) -> np.ndarray:
         """Normalised radial distance (1.0 at the limb)."""
-        height, width = shape
-        ys, xs = np.ogrid[:height, :width]
+        return self.radius_window(0, 0, *shape)
+
+    def radius_window(self, y0: int, x0: int, height: int, width: int) -> np.ndarray:
+        """``radius_map`` for rows ``y0:y0+height`` and columns ``x0:x0+width`` only."""
+        ys, xs = np.ogrid[y0 : y0 + height, x0 : x0 + width]
         return np.sqrt((xs - self.cx) ** 2 + (ys - self.cy) ** 2) / max(self.radius, 1.0)
 
 

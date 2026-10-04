@@ -1,24 +1,20 @@
-"""Train, tune and predict on a Kaggle GPU, end to end.
+"""Train U-Nets on a Kaggle GPU, and optionally tune and predict with one of them.
 
 Pushed as a private batch script with
 
     kaggle kernels push -p kaggle/
 
-It clones this repository, builds the preprocessing cache, trains the U-Net to
-completion, sweeps post-processing on half of the validation observations, and
-predicts validation and test with the winning settings; the other half of the
-validation set is kept for judging the result against earlier runs. Locally
-there is only Apple MPS, where the same training takes about four and a half
-hours; a Kaggle GPU does it in a fraction of that.
+It clones this repository, builds the preprocessing cache and trains every
+entry of VARIANTS -- side by side, one per GPU, when the session has enough of
+them (a T4 x2 session has two). Locally there is only Apple MPS, where one
+training run takes about four and a half hours.
 
-TARGET and TTA below select the experiment. Run 1 (annotator labels, no TTA)
-scored 0.30 public, 0.32 once 8-orientation TTA was added locally; run 2
-(consensus labels) matched it within noise on held-out validation. This run
-repeats run 1's set-up on the corrected pipeline: the disk is now found at the
-true limb (the old detector sat on the halo, about 35 px outside it), the best
-epoch is picked on observations from every annotator batch, and every score
-pools all annotators' views, as the competition does. Keeping run 1's labels
-means any difference from 0.32 comes from those fixes.
+With EXPLORE on, the session stops there: the U-Net is judged inside
+detector-guided fusion, which is tuned on the Mac from logits cached with the
+downloaded checkpoints, so a post-processing sweep here would measure the wrong
+pipeline. With EXPLORE off and a single variant, it also sweeps U-Net-only
+post-processing on half of the validation observations, predicts validation and
+test with the winner and scores it on the other half, as runs 1 to 3 did.
 
 Large intermediates (the preprocessing cache, cached logits) live under /tmp so
 they are not saved as notebook output. The checkpoints are written straight to
@@ -46,9 +42,16 @@ KEEP = Path("/kaggle/working")
 
 EPOCHS = 30
 BATCH_SIZE = 16
-#: "annotator" trains on one annotator's view per observation, as run 1 did;
-#: "consensus" trains on the per-observation average of every annotator's mask.
-TARGET = "annotator"
+#: This session's training runs: a name and the scripts/train.py flags that set
+#: it apart from run 3's recipe (ResNet34, one annotator's view per
+#: observation, Dice + BCE). "--crops-per-image 5" keeps an all-views epoch at
+#: run 3's ~4.5k crops, so a difference comes from the labels, not more steps.
+VARIANTS = [
+    ("views_all", ["--views", "all", "--crops-per-image", "5"]),
+    ("union", ["--target", "union"]),
+]
+#: Stop after training; see the module docstring.
+EXPLORE = True
 #: Test-time augmentation for the sweep and the final predictions: all eight
 #: orientations, which is what lifted run 1 from 0.30 to 0.32 public.
 TTA = "dihedral"
@@ -179,6 +182,67 @@ def write_summary(**extra) -> None:
         json.dumps(SUMMARY, indent=2, default=str), encoding="utf-8")
 
 
+def train_variants(py: str, env: dict, workers: int, gpus: int) -> list[Path]:
+    """Train every VARIANTS entry and return their checkpoint paths.
+
+    With at least one GPU per variant they run side by side, each pinned to its
+    own GPU and sharing the CPUs' data-loading workers; otherwise one after
+    another. A path does not exist if that variant failed before its first epoch.
+    """
+    side_by_side = 1 < len(VARIANTS) <= gpus
+    per_run = max(1, workers // len(VARIANTS)) if side_by_side else workers
+
+    def command(name: str, flags: list) -> list:
+        return [py, "scripts/train.py", "--epochs", EPOCHS, "--batch-size", BATCH_SIZE,
+                "--workers", per_run, "--limit-val", LIMIT_VAL, "--preload",
+                "--out", KEEP / f"model_{name}.pt", *flags]
+
+    started = time.time()
+    if side_by_side:
+        runs = {}
+        for gpu, (name, flags) in enumerate(VARIANTS):
+            args = [str(a) for a in command(name, flags)]
+            log(f"$ CUDA_VISIBLE_DEVICES={gpu} " + " ".join(args))
+            handle = open(OUT / f"train_{name}.log", "w", encoding="utf-8")
+            proc = subprocess.Popen(args, cwd=REPO, stdout=handle, stderr=subprocess.STDOUT,
+                                    env={**env, "CUDA_VISIBLE_DEVICES": str(gpu)})
+            runs[name] = (proc, handle)
+        follow({name: OUT / f"train_{name}.log" for name in runs},
+               lambda: any(proc.poll() is None for proc, _ in runs.values()))
+        for name, (proc, handle) in runs.items():
+            handle.close()
+            STATUS[f"train {name}"] = ("ok" if proc.returncode == 0
+                                       else f"failed: exit code {proc.returncode}")
+    else:
+        for name, flags in VARIANTS:
+            attempt(f"train {name}", lambda name=name, flags=flags: run(
+                command(name, flags), env, log_to=OUT / f"train_{name}.log"))
+    log(f"training took {(time.time() - started) / 60:.0f} min")
+    keep(*(OUT / f"train_{name}.log" for name, _ in VARIANTS))
+    return [KEEP / f"model_{name}.pt" for name, _ in VARIANTS]
+
+
+def follow(logs: dict[str, Path], still_running, every: float = 60.0) -> None:
+    """Echo the epoch summaries and errors from each log until no run is left."""
+    offsets = dict.fromkeys(logs, 0)
+    while True:
+        running = still_running()
+        for name, path in logs.items():
+            with open(path, "rb") as handle:
+                handle.seek(offsets[name])
+                chunk = handle.read()
+            # Only whole lines; the rest is read on the next pass.
+            cut = chunk.rfind(b"\n") + 1
+            offsets[name] += cut
+            for line in chunk[:cut].decode("utf-8", "replace").splitlines():
+                if (line.startswith(("epoch ", "train views", "best val", "trained without"))
+                        or "Error" in line or "Traceback" in line):
+                    log(f"[{name}] {line}")
+        if not running:
+            return
+        time.sleep(every)
+
+
 def main() -> None:
     KEEP.mkdir(parents=True, exist_ok=True)
     OUT.mkdir(parents=True, exist_ok=True)
@@ -219,17 +283,13 @@ def main() -> None:
     # --- 1. cache, split, train: everything after depends on these -------------
     run([py, "scripts/preprocess.py", "--workers", workers], env)
     run([py, "scripts/make_splits.py", "--group-by", "date"], env)
-    checkpoint = KEEP / "model_best.pt"
-    started = time.time()
-    trained = attempt("train", lambda: run(
-        [py, "scripts/train.py", "--epochs", EPOCHS, "--batch-size", BATCH_SIZE,
-         "--workers", workers, "--limit-val", LIMIT_VAL, "--target", TARGET,
-         "--out", checkpoint],
-        env, log_to=OUT / "train.log"))
-    keep(OUT / "train.log", OUT / "splits.json")
-    if trained:
-        STATUS["train"] = f"ok ({(time.time() - started) / 60:.0f} min)"
-    write_summary(commit=commit, gpu=gpu)
+    keep(OUT / "splits.json")
+    checkpoints = train_variants(py, env, workers, torch.cuda.device_count())
+    write_summary(commit=commit, gpu=gpu, epochs=EPOCHS, variants=VARIANTS, explore=EXPLORE)
+    if EXPLORE or len(VARIANTS) != 1:
+        log(f"done: {STATUS}")
+        return
+    checkpoint = checkpoints[0]
     if not checkpoint.exists():
         raise SystemExit("training produced no checkpoint; nothing to tune or predict")
 
@@ -255,7 +315,7 @@ def main() -> None:
     # Only the winner: with TTA every image is predicted eight times, and the
     # comparison that matters -- against the 0.32 run -- is made on the held-out
     # validation half after download, not against this run's own defaults.
-    name = f"{TARGET}_{TTA}"
+    name = f"{VARIANTS[0][0]}_{TTA}"
 
     def predict(subset: str, filename: str) -> None:
         flags = [part for key, value in tuned.items()
@@ -276,7 +336,7 @@ def main() -> None:
         keep(OUT / "holdout_comparison.json", OUT / "holdout.log")
 
     attempt("holdout comparison", compare)
-    write_summary(epochs=EPOCHS, target=TARGET, tta=TTA, baseline=BASELINE, tuned=tuned)
+    write_summary(tta=TTA, baseline=BASELINE, tuned=tuned)
     log(f"done: {STATUS}")
 
 

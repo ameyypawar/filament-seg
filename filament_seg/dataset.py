@@ -24,7 +24,6 @@ from __future__ import annotations
 import json
 import random
 from collections import OrderedDict
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
@@ -91,34 +90,23 @@ def _instance_centroids(annotations: Annotations, image_id: str) -> list[tuple[f
     return centroids
 
 
-@dataclass
-class _ImageCacheEntry:
-    """Per-observation state shared by every crop drawn from that image."""
-
-    #: Cached flat intensity, uint8, as written by scripts/preprocess.py.
-    flat_u8: np.ndarray
-    #: Normalised radius map (see ``Disk.radius_map``), one value per pixel.
-    radius: np.ndarray
-
-
 class _BoundedCache:
-    """Tiny LRU cache, bounded so a full epoch cannot pin every observation's
-    2048x2048 radius map in memory at once (707 stems x 16 MB would be ~11 GB).
-    A handful of slots is enough to absorb the ``crops_per_image`` repeats of
-    whichever image the sampler happens to be drawing from right now.
+    """Tiny LRU cache of decoded flat images (4 MB each), bounded so memory
+    stays flat over an epoch when the images are not preloaded. The sampler
+    shuffles crops, so it rarely hits; decoding the PNG is the cost it saves.
     """
 
     def __init__(self, maxsize: int = 8) -> None:
         self._maxsize = maxsize
-        self._data: "OrderedDict[str, _ImageCacheEntry]" = OrderedDict()
+        self._data: "OrderedDict[str, np.ndarray]" = OrderedDict()
 
-    def get(self, key: str) -> _ImageCacheEntry | None:
+    def get(self, key: str) -> np.ndarray | None:
         entry = self._data.get(key)
         if entry is not None:
             self._data.move_to_end(key)
         return entry
 
-    def put(self, key: str, entry: _ImageCacheEntry) -> None:
+    def put(self, key: str, entry: np.ndarray) -> None:
         self._data[key] = entry
         self._data.move_to_end(key)
         while len(self._data) > self._maxsize:
@@ -137,6 +125,15 @@ class FilamentCrops(Dataset):
     consensus mask is keyed by observation stem, not by view, so under this
     target ``image_ids`` is deduplicated to one view per stem -- the target
     no longer depends on which view was picked, only the crop geometry does.
+    ``target="union"`` is the same mask cut at zero: a pixel is filament if
+    any annotator drew it.
+
+    ``preload=True`` decodes every flat image once, up front (about 4 MB
+    each), instead of once per crop. Decoding is most of the time a crop
+    takes, so this is what lets two training runs share a 4-CPU machine.
+    DataLoader workers forked after that share the arrays rather than copy
+    them; under the "spawn" start method (macOS) each worker would get its
+    own copy, so leave it off there.
     """
 
     def __init__(
@@ -150,8 +147,9 @@ class FilamentCrops(Dataset):
         augment: bool = True,
         seed: int = 0,
         target: str = "annotator",
+        preload: bool = False,
     ) -> None:
-        if target not in ("annotator", "consensus"):
+        if target not in ("annotator", "consensus", "union"):
             raise ValueError(f"unknown target: {target!r}")
 
         self.annotations = annotations
@@ -164,7 +162,7 @@ class FilamentCrops(Dataset):
         self.target = target
 
         image_ids = list(image_ids)
-        if target == "consensus":
+        if target in ("consensus", "union"):
             image_ids = deduplicate_by_file(annotations, image_ids, seed=seed)
         self.image_ids = image_ids
 
@@ -177,6 +175,10 @@ class FilamentCrops(Dataset):
         }
 
         self._cache = _BoundedCache()
+        self._preloaded: dict[str, np.ndarray] = {}
+        if preload:
+            for stem in sorted({annotations.images[i].stem for i in self.image_ids}):
+                self._preloaded[stem] = self._read_flat(stem)
         # One RNG per DataLoader worker process -- see _rng().
         self._rngs: dict[int, random.Random] = {}
 
@@ -190,12 +192,12 @@ class FilamentCrops(Dataset):
         shape = (record.height, record.width)
         rng = self._rng()
 
-        entry = self._image_entry(stem, shape)
+        flat_u8 = self._flat(stem)
         y0, x0 = self._sample_crop_origin(rng, image_id, stem, shape)
         size = self.crop_size
 
-        flat_crop = entry.flat_u8[y0 : y0 + size, x0 : x0 + size].astype(np.float32) / 255.0
-        radius_crop = entry.radius[y0 : y0 + size, x0 : x0 + size]
+        flat_crop = flat_u8[y0 : y0 + size, x0 : x0 + size].astype(np.float32) / 255.0
+        radius_crop = self._disk[stem].radius_window(y0, x0, *flat_crop.shape).astype(np.float32)
         mask_crop = self._load_mask(image_id, stem, shape)[
             y0 : y0 + size, x0 : x0 + size
         ].astype(np.float32)
@@ -226,24 +228,26 @@ class FilamentCrops(Dataset):
             self._rngs[key] = rng
         return rng
 
-    def _image_entry(self, stem: str, shape: tuple[int, int]) -> _ImageCacheEntry:
-        entry = self._cache.get(stem)
-        if entry is not None:
-            return entry
+    def _flat(self, stem: str) -> np.ndarray:
+        flat_u8 = self._preloaded.get(stem)
+        if flat_u8 is None:
+            flat_u8 = self._cache.get(stem)
+        if flat_u8 is None:
+            flat_u8 = self._read_flat(stem)
+            self._cache.put(stem, flat_u8)
+        return flat_u8
 
+    def _read_flat(self, stem: str) -> np.ndarray:
         flat_path = self._flat_dir / f"{stem}.png"
         flat_u8 = cv2.imread(str(flat_path), cv2.IMREAD_GRAYSCALE)
         if flat_u8 is None:
             raise FileNotFoundError(
                 f"missing cached flat image: {flat_path} -- run scripts/preprocess.py first"
             )
-        radius = self._disk[stem].radius_map(shape).astype(np.float32)
-        entry = _ImageCacheEntry(flat_u8=flat_u8, radius=radius)
-        self._cache.put(stem, entry)
-        return entry
+        return flat_u8
 
     def _load_mask(self, image_id: str, stem: str, shape: tuple[int, int]) -> np.ndarray:
-        if self.target == "consensus":
+        if self.target in ("consensus", "union"):
             consensus_path = self._consensus_dir / f"{stem}.png"
             mask = cv2.imread(str(consensus_path), cv2.IMREAD_GRAYSCALE)
             if mask is None:
@@ -251,6 +255,8 @@ class FilamentCrops(Dataset):
                     f"missing cached consensus mask: {consensus_path} -- "
                     "run scripts/preprocess.py first"
                 )
+            if self.target == "union":
+                return (mask > 0).astype(np.uint8)
             # Soft agreement fraction, not thresholded -- 255 means every
             # annotator of this stem agreed, not just a majority.
             return mask.astype(np.float32) / 255.0

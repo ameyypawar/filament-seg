@@ -105,11 +105,29 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
         "--target",
-        choices=["annotator", "consensus"],
+        choices=["annotator", "consensus", "union"],
         default="annotator",
         help="'consensus' trains against the per-stem soft-agreement mask instead of "
-        "one annotator's view -- see filament_seg.dataset.FilamentCrops",
+        "one annotator's view, 'union' against every pixel any annotator drew -- see "
+        "filament_seg.dataset.FilamentCrops",
     )
+    parser.add_argument(
+        "--views",
+        choices=["one", "all"],
+        default="one",
+        help="'all' trains on every annotator's view of each observation, so one that "
+        "three people annotated is drawn three times as often -- the weight the scorer "
+        "gives it; 'one' keeps a single random view per observation",
+    )
+    parser.add_argument("--fn-weight", type=float, default=0.5,
+                        help="Tversky weight on missed pixels; 0.5 is plain Dice")
+    parser.add_argument("--no-val", action="store_true",
+                        help="skip per-epoch validation; --out is then the last epoch")
+    parser.add_argument("--all-data", action="store_true",
+                        help="final model: train on the validation observations too "
+                        "(implies --no-val)")
+    parser.add_argument("--preload", action="store_true",
+                        help="decode every training image once, up front -- see FilamentCrops")
     args = parser.parse_args()
 
     device = select_device()
@@ -117,14 +135,16 @@ def main() -> None:
 
     annotations = load_annotations(args.annotations)
     split = load_split(args.split)
-    train_ids = deduplicate_by_file(annotations, split["train"], seed=args.seed)
-    val_stems = sample_stems(annotations, split["val"], args.limit_val, seed=VAL_SAMPLE_SEED)
+    pool = split["train"] + (split["val"] if args.all_data else [])
+    train_ids = (sorted(pool) if args.views == "all"
+                 else deduplicate_by_file(annotations, pool, seed=args.seed))
+    validate = not (args.no_val or args.all_data)
+    val_stems = (sample_stems(annotations, split["val"], args.limit_val, seed=VAL_SAMPLE_SEED)
+                 if validate else [])
     val_views = records_for_stems(annotations, split["val"], val_stems)
     views_by_stem = {
         stem: [i for i in val_views if annotations.images[i].stem == stem] for stem in val_stems
     }
-    print(f"train observations: {len(train_ids)}  val observations (capped): "
-          f"{len(val_stems)} ({len(val_views)} annotator views)")
 
     cache_dir = Path(args.cache_dir)
     disk_geometry = load_disk_geometry(cache_dir / "disk.json")
@@ -138,7 +158,10 @@ def main() -> None:
         augment=True,
         seed=args.seed,
         target=args.target,
+        preload=args.preload,
     )
+    print(f"train views: {len(dataset.image_ids)}  val observations (capped): "
+          f"{len(val_stems)} ({len(val_views)} annotator views)")
     loader = DataLoader(
         dataset,
         batch_size=args.batch_size,
@@ -149,7 +172,7 @@ def main() -> None:
     )
 
     model = build_model(encoder=args.encoder, in_channels=2, weights="imagenet").to(device)
-    criterion = DiceBCELoss()
+    criterion = DiceBCELoss(fn_weight=args.fn_weight)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
     use_amp = device.type == "cuda"
@@ -198,11 +221,13 @@ def main() -> None:
         scheduler.step()
         train_loss = running_loss / max(n_seen, 1)
 
-        val_summary = run_validation(
-            model, views_by_stem, annotations, disk_geometry, cache_dir / "flat", device,
-            postprocess_params,
-        )
-        val_pq = val_summary.get("pq_pooled", 0.0)
+        val_summary, val_pq = {}, float("nan")
+        if validate:
+            val_summary = run_validation(
+                model, views_by_stem, annotations, disk_geometry, cache_dir / "flat", device,
+                postprocess_params,
+            )
+            val_pq = val_summary.get("pq_pooled", 0.0)
         elapsed = time.perf_counter() - start
 
         payload = {
@@ -211,6 +236,9 @@ def main() -> None:
             "in_channels": 2,
             "crop_size": args.crop_size,
             "target": args.target,
+            "views": args.views,
+            "fn_weight": args.fn_weight,
+            "all_data": args.all_data,
             "epoch": epoch,
             "val_pq": val_pq,
         }
@@ -222,7 +250,8 @@ def main() -> None:
         # both can be scored on the full validation split afterwards.
         torch.save(payload, out_path.with_name(out_path.stem + "_last.pt"))
 
-        improved = val_pq > best_pq
+        # Without validation there is nothing to select on: --out is the latest epoch.
+        improved = not validate or val_pq > best_pq
         if improved:
             best_pq = val_pq
             torch.save(payload, out_path)
@@ -234,7 +263,10 @@ def main() -> None:
             + ("  * saved" if improved else "")
         )
 
-    print(f"best val PQ: {best_pq:.4f}  -> {out_path}")
+    if validate:
+        print(f"best val PQ: {best_pq:.4f}  -> {out_path}")
+    else:
+        print(f"trained without validation; last epoch -> {out_path}")
 
 
 if __name__ == "__main__":
