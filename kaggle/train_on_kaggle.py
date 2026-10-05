@@ -44,11 +44,16 @@ EPOCHS = 30
 BATCH_SIZE = 16
 #: This session's training runs: a name and the scripts/train.py flags that set
 #: it apart from run 3's recipe (ResNet34, one annotator's view per
-#: observation, Dice + BCE). "--crops-per-image 5" keeps an all-views epoch at
-#: run 3's ~4.5k crops, so a difference comes from the labels, not more steps.
+#: observation, Dice + BCE). Run 4 trained "views_all" (every annotator's view,
+#: "--crops-per-image 5" to keep run 3's ~4.5k crops an epoch) and "union";
+#: run 5 "seed1" and "tversky" (--fn-weight 0.7). In fusion none beat run 3,
+#: and seed 1 of run 3's own recipe scored 0.007 below it: the spread between
+#: seeds is as large as any of those changes. So the recipe stays, and this
+#: run trains it on every labelled observation, twice, as candidates for the
+#: final entry; validation observations are in training, so nothing is scored.
 VARIANTS = [
-    ("views_all", ["--views", "all", "--crops-per-image", "5"]),
-    ("union", ["--target", "union"]),
+    ("alldata_s0", ["--all-data"]),
+    ("alldata_s1", ["--all-data", "--seed", "1"]),
 ]
 #: Stop after training; see the module docstring.
 EXPLORE = True
