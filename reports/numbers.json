@@ -1,0 +1,1434 @@
+{
+  "meta": {
+    "generated_by": "reports/make_figures.py",
+    "pipeline": "V (validated entry): run-3 ResNet34 U-Net, last epoch, 8-way dihedral TTA, fused with detectors 1+2+4 (merged with fusion.merge_views)",
+    "fusion_params": {
+      "threshold": 0.5,
+      "close_radius": 3,
+      "grow": 4,
+      "min_score": 0.3,
+      "min_area": 200,
+      "keep_unclaimed": 0,
+      "unclaimed_gap": 24
+    },
+    "inputs": {
+      "logits": "outputs/step3/logits_v5last_dihedral",
+      "detections_val": "outputs/step3/detections_val_det124L.json",
+      "disk_geometry": "data/cache/disk.json",
+      "flat_images": "data/cache/flat",
+      "split": "outputs/splits.json",
+      "test_submission": "outputs/step3/submission_validated_v5last_det124L.csv"
+    },
+    "scoring": "every annotator view scored separately, TP/FP/FN/IoU pooled over views (filament_seg.metrics.evaluate_image with fragmentation, summarize)",
+    "in_sample_note": "V's fusion setting was chosen on all 144 validation observations, so these validation numbers are in-sample for the fusion knobs; V's cross-fitted PQ is in fig_seeds (Det 1+2+4)",
+    "runtime_seconds": 23.8
+  },
+  "validation": {
+    "n_observations": 144,
+    "n_views": 248,
+    "views_per_observation": {
+      "1": 79,
+      "2": 26,
+      "3": 39
+    },
+    "pq": 0.424143,
+    "sq": 0.676401,
+    "rq": 0.627059,
+    "pq_ci95": [
+      0.400389,
+      0.446349
+    ],
+    "sq_ci95": [
+      0.66913,
+      0.683085
+    ],
+    "rq_ci95": [
+      0.594212,
+      0.657149
+    ],
+    "bootstrap": {
+      "unit": "observation (its views kept together)",
+      "n_resamples": 2000,
+      "seed": 0,
+      "interval": "2.5th-97.5th percentile"
+    },
+    "tp": 1066,
+    "fp": 477,
+    "fn": 791,
+    "precision": 0.690862,
+    "recall": 0.574044,
+    "hit_rate": 0.574044,
+    "miss_rate": 0.425956,
+    "dice_mean": 0.803815,
+    "dice_median": 0.811836,
+    "iou_mean": 0.676401,
+    "iou_median": 0.683269,
+    "n_gt_instances": 1857,
+    "n_pred_instance_views": 1543,
+    "n_pred_instances": 894,
+    "pred_instances_per_observation": {
+      "n": 144,
+      "mean": 6.208333,
+      "p25": 3.0,
+      "median": 6.0,
+      "p75": 9.0,
+      "min": 0.0,
+      "max": 18.0
+    },
+    "pred_area_px": {
+      "n": 894,
+      "mean": 1907.412752,
+      "p25": 747.25,
+      "median": 1238.0,
+      "p75": 2294.25,
+      "min": 203.0,
+      "max": 18017.0
+    },
+    "matched_iou": {
+      "n": 1066,
+      "mean": 0.676401,
+      "std": 0.085657,
+      "min": 0.500219,
+      "p05": 0.530033,
+      "p25": 0.613608,
+      "median": 0.683269,
+      "p75": 0.74287,
+      "p95": 0.807779,
+      "max": 0.893617
+    },
+    "matched_dice": {
+      "n": 1066,
+      "mean": 0.803815,
+      "std": 0.061806,
+      "min": 0.666861,
+      "p05": 0.692838,
+      "p25": 0.760542,
+      "median": 0.811836,
+      "p75": 0.852467,
+      "p95": 0.89367,
+      "max": 0.94382
+    },
+    "one_to_many": 45,
+    "many_to_one": 59,
+    "pq_per_view_mean": 0.422072,
+    "pq_per_view_distribution": {
+      "n": 248,
+      "mean": 0.422072,
+      "std": 0.179912,
+      "min": 0.0,
+      "p05": 0.0,
+      "p25": 0.307579,
+      "median": 0.430289,
+      "p75": 0.542559,
+      "p95": 0.701354,
+      "max": 0.878507
+    },
+    "pq_per_observation": {
+      "n": 144,
+      "mean": 0.408204,
+      "p25": 0.326846,
+      "median": 0.424408,
+      "p75": 0.524612,
+      "min": 0.0,
+      "max": 0.785649
+    },
+    "by_annotator_group": {
+      "01": {
+        "n_views": 120,
+        "n_observations": 52,
+        "pq": 0.405876,
+        "pq_ci95_views": [
+          0.379193,
+          0.431708
+        ],
+        "pq_ci95_observations": [
+          0.370101,
+          0.442844
+        ],
+        "sq": 0.665055,
+        "rq": 0.61029,
+        "tp": 516,
+        "fp": 273,
+        "fn": 386,
+        "n_gt": 902
+      },
+      "02": {
+        "n_views": 21,
+        "n_observations": 16,
+        "pq": 0.418509,
+        "pq_ci95_views": [
+          0.370257,
+          0.464382
+        ],
+        "pq_ci95_observations": [
+          0.365308,
+          0.468729
+        ],
+        "sq": 0.702079,
+        "rq": 0.5961,
+        "tp": 107,
+        "fp": 44,
+        "fn": 101,
+        "n_gt": 208
+      },
+      "03": {
+        "n_views": 19,
+        "n_observations": 18,
+        "pq": 0.427488,
+        "pq_ci95_views": [
+          0.361442,
+          0.490159
+        ],
+        "pq_ci95_observations": [
+          0.362624,
+          0.488792
+        ],
+        "sq": 0.689933,
+        "rq": 0.619608,
+        "tp": 79,
+        "fp": 35,
+        "fn": 62,
+        "n_gt": 141
+      },
+      "04": {
+        "n_views": 26,
+        "n_observations": 21,
+        "pq": 0.400248,
+        "pq_ci95_views": [
+          0.344722,
+          0.448678
+        ],
+        "pq_ci95_observations": [
+          0.342593,
+          0.449527
+        ],
+        "sq": 0.654406,
+        "rq": 0.611621,
+        "tp": 100,
+        "fp": 49,
+        "fn": 78,
+        "n_gt": 178
+      },
+      "05": {
+        "n_views": 47,
+        "n_observations": 22,
+        "pq": 0.469913,
+        "pq_ci95_views": [
+          0.431422,
+          0.505881
+        ],
+        "pq_ci95_observations": [
+          0.41058,
+          0.51454
+        ],
+        "sq": 0.683069,
+        "rq": 0.687943,
+        "tp": 194,
+        "fp": 64,
+        "fn": 112,
+        "n_gt": 306
+      },
+      "06": {
+        "n_views": 15,
+        "n_observations": 15,
+        "pq": 0.493063,
+        "pq_ci95_views": [
+          0.423081,
+          0.55873
+        ],
+        "pq_ci95_observations": [
+          0.423081,
+          0.55873
+        ],
+        "sq": 0.718463,
+        "rq": 0.686275,
+        "tp": 70,
+        "fp": 12,
+        "fn": 52,
+        "n_gt": 122
+      }
+    },
+    "pq_range_over_annotator_groups": [
+      0.400248,
+      0.493063
+    ],
+    "detections_scored": {
+      "below_score": 2402,
+      "dropped": 105,
+      "kept": 894
+    },
+    "fusion_runtime_seconds_per_observation": {
+      "n": 144,
+      "mean": 0.167769,
+      "p25": 0.095189,
+      "median": 0.16675,
+      "p75": 0.230806,
+      "min": 0.012493,
+      "max": 0.47829,
+      "note": "wall time of the fusion step alone (fuse() and RLE encoding, from cached logits and detections) on this Mac's CPU, measured while the other workers ran in parallel; U-Net and detector inference ran on Kaggle GPUs and are not timed here"
+    },
+    "definitions": {
+      "pq_sq_rq": "pooled over all 248 views: PQ = sum IoU / (TP + FP/2 + FN/2), SQ = sum IoU / TP, RQ = TP / (TP + FP/2 + FN/2)",
+      "precision_recall": "pooled over views: precision = TP / (TP + FP), recall = hit rate = TP / (TP + FN), miss rate = FN / (TP + FN)",
+      "ci95": "95% bootstrap interval, 2000 resamples of the 144 observations (seed 0)",
+      "by_annotator_group_ci": "pq_ci95_views resamples the group's views; pq_ci95_observations resamples its observations with their views of that group kept together",
+      "n_pred_instance_views": "predicted instances counted once per view they are scored against (summarize's n_pred)",
+      "one_to_many": "annotated filaments covered >10% each by >= 2 predictions, per view",
+      "many_to_one": "predictions covering >10% each of >= 2 annotated filaments, per view",
+      "pq_per_view_mean": "mean of per-view PQ (summarize's pq_per_image_mean)",
+      "pq_per_observation": "PQ pooled over each observation's views, then summarised",
+      "by_annotator_group": "views grouped by the first two digits of the view id",
+      "detections_scored": "fate of every merged detection on validation: kept, dropped (claim < 200 px), below_score (< 0.30)"
+    },
+    "consistency_check": {
+      "reference": "outputs/step3/totals_det124L_v5last.npz, crossfit rows of the tuning half",
+      "n_observations_compared": 72,
+      "max_abs_difference": 0.0,
+      "matches": true
+    }
+  },
+  "test": {
+    "submission": "outputs/step3/submission_validated_v5last_det124L.csv",
+    "n_images": 180,
+    "n_images_with_predictions": 177,
+    "n_instances": 1097,
+    "instances_per_image": {
+      "n": 180,
+      "mean": 6.094444,
+      "p25": 3.0,
+      "median": 6.0,
+      "p75": 9.0,
+      "min": 0.0,
+      "max": 17.0
+    },
+    "pred_area_px": {
+      "n": 1097,
+      "mean": 1916.719234,
+      "p25": 755.0,
+      "median": 1300.0,
+      "p75": 2295.0,
+      "min": 200.0,
+      "max": 17467.0
+    },
+    "validation_comparison": {
+      "instances_per_observation_mean": 6.208333,
+      "pred_area_px_median": 1238.0
+    }
+  },
+  "progression_intervals": {
+    "interval": "95% bootstrap percentile interval, 2000 resamples of observations with replacement, seed 0",
+    "note": "all_144 is cross-fitted for fusion rows (each half scored with the setting the other half chose); the U-Net-only baseline uses one fixed setting (thr 0.6, area 400, gap 24, close 3, open 0). held_out_72 is the half never used for tuning.",
+    "pipelines": {
+      "unet_only_selected_epoch": {
+        "label": "U-Net only, selected-epoch weights",
+        "file": "outputs/step3/totals_det12.npz",
+        "array": "baseline",
+        "all_144": {
+          "n_observations": 144,
+          "pq": 0.371154,
+          "sq": 0.671652,
+          "rq": 0.552599,
+          "tp": 1111,
+          "fp": 1053,
+          "fn": 746,
+          "pq_ci95": [
+            0.348171,
+            0.393049
+          ]
+        },
+        "held_out_72": {
+          "n_observations": 72,
+          "pq": 0.367839,
+          "sq": 0.66847,
+          "rq": 0.55027,
+          "tp": 509,
+          "fp": 503,
+          "fn": 329,
+          "pq_ci95": [
+            0.334714,
+            0.399247
+          ]
+        }
+      },
+      "unet_only_last_epoch": {
+        "label": "U-Net only, last-epoch weights",
+        "file": "outputs/step3/totals_det12_v5last.npz",
+        "array": "baseline",
+        "all_144": {
+          "n_observations": 144,
+          "pq": 0.370859,
+          "sq": 0.670348,
+          "rq": 0.553233,
+          "tp": 1138,
+          "fp": 1119,
+          "fn": 719,
+          "pq_ci95": [
+            0.34919,
+            0.392534
+          ]
+        },
+        "held_out_72": {
+          "n_observations": 72,
+          "pq": 0.371369,
+          "sq": 0.666279,
+          "rq": 0.557377,
+          "tp": 527,
+          "fp": 526,
+          "fn": 311,
+          "pq_ci95": [
+            0.340211,
+            0.401085
+          ]
+        }
+      },
+      "fusion_det12_selected_epoch": {
+        "label": "Fusion, detectors 1+2, selected-epoch U-Net",
+        "file": "outputs/step3/totals_det12.npz",
+        "array": "crossfit",
+        "all_144": {
+          "n_observations": 144,
+          "pq": 0.410917,
+          "sq": 0.674331,
+          "rq": 0.609371,
+          "tp": 1060,
+          "fp": 562,
+          "fn": 797,
+          "pq_ci95": [
+            0.388211,
+            0.432878
+          ]
+        },
+        "held_out_72": {
+          "n_observations": 72,
+          "pq": 0.419192,
+          "sq": 0.670536,
+          "rq": 0.62516,
+          "tp": 487,
+          "fp": 233,
+          "fn": 351,
+          "pq_ci95": [
+            0.38619,
+            0.453479
+          ]
+        }
+      },
+      "fusion_det12_last_epoch": {
+        "label": "Fusion, detectors 1+2, last-epoch U-Net",
+        "file": "outputs/step3/totals_det12_v5last.npz",
+        "array": "crossfit",
+        "all_144": {
+          "n_observations": 144,
+          "pq": 0.418259,
+          "sq": 0.674717,
+          "rq": 0.619903,
+          "tp": 1087,
+          "fp": 563,
+          "fn": 770,
+          "pq_ci95": [
+            0.395038,
+            0.440324
+          ]
+        },
+        "held_out_72": {
+          "n_observations": 72,
+          "pq": 0.427843,
+          "sq": 0.6708,
+          "rq": 0.63781,
+          "tp": 501,
+          "fp": 232,
+          "fn": 337,
+          "pq_ci95": [
+            0.395575,
+            0.460906
+          ]
+        }
+      },
+      "v_fusion_det124": {
+        "label": "V: fusion, detectors 1+2+4, last-epoch U-Net",
+        "file": "outputs/step3/totals_det124L_v5last.npz",
+        "array": "crossfit",
+        "all_144": {
+          "n_observations": 144,
+          "pq": 0.421443,
+          "sq": 0.67587,
+          "rq": 0.623557,
+          "tp": 1080,
+          "fp": 527,
+          "fn": 777,
+          "pq_ci95": [
+            0.398507,
+            0.443266
+          ]
+        },
+        "held_out_72": {
+          "n_observations": 72,
+          "pq": 0.433434,
+          "sq": 0.669552,
+          "rq": 0.647349,
+          "tp": 525,
+          "fp": 259,
+          "fn": 313,
+          "pq_ci95": [
+            0.403845,
+            0.46392
+          ]
+        }
+      }
+    }
+  },
+  "detectors_only": {
+    "description": "no U-Net: every merged detection of detections_val_det124L.json, in descending score, claims the not yet claimed pixels of its own full-resolution mask on the disk (0.98 R); claims under min_area are dropped; scored on every view, pooled",
+    "grid": {
+      "min_score": [
+        0.15,
+        0.2,
+        0.25,
+        0.3,
+        0.35,
+        0.4,
+        0.5
+      ],
+      "min_area": [
+        100,
+        200,
+        400,
+        600,
+        800,
+        1200
+      ]
+    },
+    "split": "fuse_detections.py's: sample_stems(seed 0, 72) tunes, the other 72 are held out; cross-fitting scores each half with the setting the other half chose",
+    "crossfit_144": {
+      "n_observations": 144,
+      "pq": 0.383411,
+      "sq": 0.650683,
+      "rq": 0.589243,
+      "tp": 997,
+      "fp": 530,
+      "fn": 860,
+      "pq_ci95": [
+        0.360476,
+        0.405752
+      ]
+    },
+    "held_out_72": {
+      "n_observations": 72,
+      "pq": 0.384987,
+      "sq": 0.648104,
+      "rq": 0.59402,
+      "tp": 447,
+      "fp": 220,
+      "fn": 391,
+      "pq_ci95": [
+        0.352988,
+        0.41771
+      ]
+    },
+    "settings": {
+      "tuned_on_tuning_half_applied_to_held_out": {
+        "min_score": 0.35,
+        "min_area": 400
+      },
+      "tuned_on_held_out_half_applied_to_tuning_half": {
+        "min_score": 0.3,
+        "min_area": 400
+      },
+      "best_on_all_144_in_sample": {
+        "min_score": 0.3,
+        "min_area": 400,
+        "pq": 0.384046
+      }
+    },
+    "v_minus_detectors_only": {
+      "method": "paired bootstrap over observations, 10000 resamples, seed 0 (filament_seg.scoring.paired_bootstrap)",
+      "crossfit_144": {
+        "delta": 0.038032,
+        "ci95": [
+          0.025761,
+          0.051122
+        ],
+        "p_v_better": 1.0,
+        "v_pq": 0.421443,
+        "detectors_only_pq": 0.383411
+      },
+      "held_out_72": {
+        "delta": 0.048447,
+        "ci95": [
+          0.031251,
+          0.067599
+        ],
+        "p_v_better": 1.0,
+        "v_pq": 0.433434,
+        "detectors_only_pq": 0.384987
+      }
+    }
+  },
+  "fig_qualitative": {
+    "file": "reports/figures/fig_qualitative.pdf",
+    "stem": "20150518145654Bh",
+    "views": [
+      "010101-20150518145654Bh",
+      "010102-20150518145654Bh"
+    ],
+    "selection": {
+      "rule": "observations with 2-3 annotators and PQ within 0.02 of the median per-observation PQ of all 144; for each, the 700 px crop wholly inside 0.98 R of the disk with the most outcomes against annotator 1 (matched filaments, FPs, FNs) wholly inside, needing >= 2 TP, >= 1 FP and >= 1 FN; the observation whose crop shows the most outcomes is chosen",
+      "median_observation_pq": 0.424408,
+      "candidates_in_band": 9,
+      "observation_pq_percentile": 55.555556
+    },
+    "crop": {
+      "x0": 820,
+      "y0": 570,
+      "size": 700,
+      "outcomes_inside": 16,
+      "tp_inside": 9,
+      "fp_inside": 1,
+      "fn_inside": 6,
+      "display_range_quiet_sun_units": [
+        0.65,
+        1.35
+      ],
+      "scale_bar_px": 100,
+      "embedded_ppi": 403
+    },
+    "observation": {
+      "pq": 0.437397,
+      "sq": 0.647684,
+      "rq": 0.675325,
+      "n_gt": 41,
+      "n_pred": 36,
+      "tp": 26,
+      "fp": 10,
+      "fn": 15,
+      "iou_sum": 16.839773,
+      "n_pred_instances": 18,
+      "n_views": 2
+    },
+    "per_view": [
+      {
+        "view": "010101-20150518145654Bh",
+        "annotator_prefix": "010101",
+        "n_gt": 24,
+        "n_pred": 18,
+        "tp": 15,
+        "fp": 3,
+        "fn": 9,
+        "pq": 0.445963,
+        "sq": 0.624349,
+        "one_to_many": 0,
+        "many_to_one": 2
+      },
+      {
+        "view": "010102-20150518145654Bh",
+        "annotator_prefix": "010102",
+        "n_gt": 17,
+        "n_pred": 18,
+        "tp": 11,
+        "fp": 7,
+        "fn": 6,
+        "pq": 0.427117,
+        "sq": 0.679504,
+        "one_to_many": 1,
+        "many_to_one": 0
+      }
+    ],
+    "panel_c_instances_in_crop": 10,
+    "panel_c_instance_colors": [
+      "#AA4499",
+      "#117733",
+      "#DDDDDD",
+      "#CC6677",
+      "#882255",
+      "#A6DBA0",
+      "#8C613C"
+    ],
+    "panel_d_in_crop_vs_annotator_1": {
+      "tp": 9,
+      "fp": 1,
+      "fn": 6
+    }
+  },
+  "fig_examples": {
+    "file": "reports/figures/fig_examples.pdf",
+    "crop_size_px": 800,
+    "embedded_ppi": 347,
+    "quartiles_of_per_observation_pq": {
+      "p25": 0.326846,
+      "p75": 0.524612
+    },
+    "display": "corrected image, 0.65-1.35 quiet-Sun units to black-white; beyond the fitted limb shown black; outcomes against each observation's first annotator as in fig_qualitative (d)",
+    "panels": [
+      {
+        "panel": "i",
+        "case": "good",
+        "rule": "per-observation PQ >= the 75th percentile (0.525), >= 2 annotators, an 800 px crop on the disk with >= 5 of annotator 1's filaments wholly inside; the most such filaments, then the higher PQ",
+        "stem": "20111116063134Lh",
+        "views": [
+          "050101-20111116063134Lh",
+          "050102-20111116063134Lh",
+          "050103-20111116063134Lh"
+        ],
+        "observation": {
+          "pq": 0.547527,
+          "sq": 0.66335,
+          "rq": 0.825397,
+          "n_gt": 33,
+          "n_pred": 30,
+          "tp": 26,
+          "fp": 4,
+          "fn": 7,
+          "iou_sum": 17.247099,
+          "n_pred_instances": 10,
+          "n_views": 3
+        },
+        "crop": {
+          "x0": 620,
+          "y0": 860,
+          "size": 800,
+          "annotator_1_inside": 6,
+          "fraction_beyond_limb": 0.0
+        },
+        "in_crop_vs_annotator_1": {
+          "tp": 4,
+          "fp": 1,
+          "fn": 2
+        }
+      },
+      {
+        "panel": "ii",
+        "case": "failure",
+        "rule": "per-observation PQ <= the 25th percentile (0.327), an 800 px crop on the disk with >= 5 of annotator 1's filaments wholly inside; the most such filaments, then the lower PQ",
+        "stem": "20120703070814Th",
+        "views": [
+          "010401-20120703070814Th",
+          "010402-20120703070814Th",
+          "010403-20120703070814Th"
+        ],
+        "observation": {
+          "pq": 0.146298,
+          "sq": 0.593319,
+          "rq": 0.246575,
+          "n_gt": 43,
+          "n_pred": 30,
+          "tp": 9,
+          "fp": 21,
+          "fn": 34,
+          "iou_sum": 5.339867,
+          "n_pred_instances": 10,
+          "n_views": 3
+        },
+        "crop": {
+          "x0": 680,
+          "y0": 340,
+          "size": 800,
+          "annotator_1_inside": 10,
+          "fraction_beyond_limb": 0.0
+        },
+        "in_crop_vs_annotator_1": {
+          "tp": 2,
+          "fp": 3,
+          "fn": 8
+        }
+      },
+      {
+        "panel": "iii",
+        "case": "limb",
+        "rule": "an 800 px crop with 10%-40% of its area beyond the limb, holding >= 2 of annotator 1's filaments wholly inside with box centres beyond 0.85 R; the most near-limb filaments, then the most filaments, any PQ",
+        "stem": "20130303063134Lh",
+        "views": [
+          "020101-20130303063134Lh"
+        ],
+        "observation": {
+          "pq": 0.492602,
+          "sq": 0.738903,
+          "rq": 0.666667,
+          "n_gt": 5,
+          "n_pred": 4,
+          "tp": 3,
+          "fp": 1,
+          "fn": 2,
+          "iou_sum": 2.216709,
+          "n_pred_instances": 4,
+          "n_views": 1
+        },
+        "crop": {
+          "x0": 80,
+          "y0": 740,
+          "size": 800,
+          "annotator_1_inside": 4,
+          "near_limb_inside": 3,
+          "fraction_beyond_limb": 0.105822
+        },
+        "in_crop_vs_annotator_1": {
+          "tp": 2,
+          "fp": 0,
+          "fn": 2
+        }
+      }
+    ]
+  },
+  "fig_iou_dice": {
+    "file": "reports/figures/fig_iou_dice.pdf",
+    "panel_a_best_match_iou": {
+      "unit": "every annotated filament of every view (n_gt), with its best IoU against any of V's predictions for that observation",
+      "n": 1857,
+      "missed_le_0.25": 537,
+      "of_which_iou_0": 464,
+      "near_miss_0.25_to_0.5": 254,
+      "matched_gt_0.5": 1066,
+      "shares": {
+        "missed": 0.289176,
+        "near_miss": 0.13678,
+        "matched": 0.574044
+      },
+      "matched_equals_tp": true,
+      "bin_edges": [
+        0.0,
+        0.05,
+        0.1,
+        0.15,
+        0.2,
+        0.25,
+        0.3,
+        0.35,
+        0.4,
+        0.45,
+        0.5,
+        0.55,
+        0.6,
+        0.65,
+        0.7,
+        0.75,
+        0.8,
+        0.85,
+        0.9,
+        0.95,
+        1.0
+      ],
+      "histogram_counts": [
+        471,
+        9,
+        14,
+        18,
+        25,
+        35,
+        37,
+        44,
+        58,
+        80,
+        97,
+        140,
+        166,
+        209,
+        213,
+        174,
+        57,
+        10,
+        0,
+        0
+      ],
+      "mean": 0.448864,
+      "p25": 0.003704,
+      "median": 0.562607,
+      "p75": 0.697585,
+      "min": 0.0,
+      "max": 0.893617
+    },
+    "panel_b_dice": {
+      "n": 1066,
+      "mean": 0.803815,
+      "p25": 0.760542,
+      "median": 0.811836,
+      "p75": 0.852467,
+      "min": 0.666861,
+      "max": 0.94382,
+      "bin_edges": [
+        0.66,
+        0.68,
+        0.7,
+        0.72,
+        0.74,
+        0.76,
+        0.78,
+        0.8,
+        0.82,
+        0.84,
+        0.86,
+        0.88,
+        0.9,
+        0.92,
+        0.94,
+        0.96
+      ],
+      "histogram_counts": [
+        28,
+        40,
+        69,
+        67,
+        61,
+        89,
+        118,
+        119,
+        133,
+        123,
+        114,
+        70,
+        26,
+        8,
+        1
+      ]
+    },
+    "bin_edges": [
+      0.5,
+      0.52,
+      0.54,
+      0.56,
+      0.58,
+      0.6,
+      0.62,
+      0.64,
+      0.66,
+      0.68,
+      0.7,
+      0.72,
+      0.74,
+      0.76,
+      0.78,
+      0.8,
+      0.82,
+      0.84,
+      0.86,
+      0.88,
+      0.9,
+      0.92,
+      0.94,
+      0.96,
+      0.98,
+      1.0
+    ],
+    "iou": {
+      "n": 1066,
+      "mean": 0.676401,
+      "p25": 0.613608,
+      "median": 0.683269,
+      "p75": 0.74287,
+      "min": 0.500219,
+      "max": 0.893617,
+      "histogram_counts": [
+        32,
+        38,
+        61,
+        56,
+        49,
+        46,
+        73,
+        85,
+        81,
+        90,
+        95,
+        82,
+        85,
+        73,
+        53,
+        34,
+        20,
+        6,
+        5,
+        2,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "dice": {
+      "n": 1066,
+      "mean": 0.803815,
+      "p25": 0.760542,
+      "median": 0.811836,
+      "p75": 0.852467,
+      "min": 0.666861,
+      "max": 0.94382,
+      "histogram_counts": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        28,
+        40,
+        69,
+        67,
+        61,
+        89,
+        116,
+        121,
+        133,
+        123,
+        114,
+        70,
+        26,
+        8,
+        1,
+        0,
+        0
+      ]
+    },
+    "note": "pooled over all 248 views; Dice = 2 IoU / (1 + IoU); dashed lines: the 0.5 matching threshold in (a), the median in (b); iou and dice are the matched pairs on bin_edges"
+  },
+  "fig_errors": {
+    "file": "reports/figures/fig_errors.pdf",
+    "unit": "instance-views: an unmatched filament or prediction counted once per view",
+    "fn_total": 791,
+    "fp_total": 477,
+    "fn_causes": {
+      "near_miss": {
+        "label": "Near miss (IoU 0.25–0.5)",
+        "definition": "best predicted IoU in (0.25, 0.5]",
+        "count": 254,
+        "share": 0.321113
+      },
+      "low_overlap": {
+        "label": "Low overlap (IoU ≤ 0.25)",
+        "definition": "best predicted IoU in (0, 0.25]",
+        "count": 73,
+        "share": 0.092288
+      },
+      "dropped_small": {
+        "label": "Detected, < 200 U-Net px",
+        "definition": "no prediction overlaps it; the best detection has IoU > 0.5 and score >= 0.30 but claimed fewer than 200 unclaimed U-Net pixels, so it was dropped",
+        "count": 6,
+        "share": 0.007585
+      },
+      "below_score": {
+        "label": "Detected, score < 0.30",
+        "definition": "no prediction overlaps it; the best detection has IoU > 0.5 but score < 0.30",
+        "count": 260,
+        "share": 0.328698
+      },
+      "poor_detection": {
+        "label": "Detector IoU 0.25–0.5 only",
+        "definition": "no prediction overlaps it; the best detection has IoU in (0.25, 0.5]",
+        "count": 124,
+        "share": 0.156764
+      },
+      "no_detection": {
+        "label": "No detection",
+        "definition": "no prediction overlaps it; no detection has IoU > 0.25",
+        "count": 74,
+        "share": 0.093552
+      },
+      "kept_disjoint": {
+        "label": "Detected, kept, disjoint",
+        "definition": "a detection with IoU > 0.5 and score >= 0.30 was kept, but its instance does not touch the filament",
+        "count": 0,
+        "share": 0.0
+      }
+    },
+    "fn_groups": {
+      "Prediction overlaps it": {
+        "causes": [
+          "near_miss",
+          "low_overlap"
+        ],
+        "count": 327,
+        "share": 0.413401
+      },
+      "No prediction overlaps it": {
+        "causes": [
+          "below_score",
+          "dropped_small",
+          "poor_detection",
+          "no_detection"
+        ],
+        "count": 464,
+        "share": 0.586599
+      }
+    },
+    "fp_causes": {
+      "near_miss": {
+        "label": "Near miss (IoU 0.25–0.5)",
+        "definition": "best annotated IoU in (0.25, 0.5]",
+        "count": 250,
+        "share": 0.524109
+      },
+      "low_overlap": {
+        "label": "Low overlap (IoU ≤ 0.25)",
+        "definition": "best annotated IoU in (0, 0.25]",
+        "count": 66,
+        "share": 0.138365
+      },
+      "no_overlap": {
+        "label": "No overlap",
+        "definition": "touches no annotated filament of the view",
+        "count": 161,
+        "share": 0.337526
+      }
+    },
+    "fp_on_multi_view_observations": {
+      "n_fp": 349,
+      "share_of_all_fp": 0.731656,
+      "matched_in_another_view": 182,
+      "share_matched_in_another_view": 0.52149
+    },
+    "gt_area_px": {
+      "tp": {
+        "n": 1066,
+        "mean": 2160.954972,
+        "p25": 787.25,
+        "median": 1395.0,
+        "p75": 2557.0,
+        "min": 187.0,
+        "max": 30769.0
+      },
+      "fn": {
+        "n": 791,
+        "mean": 1892.850822,
+        "p25": 469.5,
+        "median": 903.0,
+        "p75": 1808.5,
+        "min": 94.0,
+        "max": 32790.0
+      }
+    },
+    "fp_pred_area_px": {
+      "n": 477,
+      "mean": 1522.566038,
+      "p25": 639.0,
+      "median": 1078.0,
+      "p75": 1801.0,
+      "min": 203.0,
+      "max": 18017.0
+    }
+  },
+  "fig_seeds": {
+    "file": "reports/figures/fig_seeds.pdf",
+    "metric": "pooled PQ of each run's cross-fitted totals (pq_of(crossfit.sum(0))); holdout_pq is the 72 held-out observations only",
+    "interval": "95% bootstrap percentile interval, 2000 resamples of the 144 observations (rows of crossfit) with replacement, seed 0; the same resamples for every run",
+    "groups": [
+      {
+        "group": "U-Net variants, detectors 1+2",
+        "members": [
+          {
+            "label": "Run 3 (used in both entries)",
+            "file": "outputs/step3/totals_det12_v5last_wide.npz",
+            "kind": "base",
+            "crossfit_pq": 0.41716,
+            "crossfit_pq_ci95": [
+              0.393879,
+              0.439276
+            ],
+            "holdout_pq": 0.425359,
+            "n_observations": 144
+          },
+          {
+            "label": "Run 3 recipe, seed 1",
+            "file": "outputs/step3/totals_det12_u2seed1last.npz",
+            "kind": "seed",
+            "crossfit_pq": 0.409875,
+            "crossfit_pq_ci95": [
+              0.38653,
+              0.432341
+            ],
+            "holdout_pq": 0.415093,
+            "n_observations": 144
+          },
+          {
+            "label": "All annotator views",
+            "file": "outputs/step3/totals_det12_u1views_alllast.npz",
+            "kind": "variant",
+            "crossfit_pq": 0.411471,
+            "crossfit_pq_ci95": [
+              0.38759,
+              0.433953
+            ],
+            "holdout_pq": 0.420735,
+            "n_observations": 144
+          },
+          {
+            "label": "Union target",
+            "file": "outputs/step3/totals_det12_u1unionlast.npz",
+            "kind": "variant",
+            "crossfit_pq": 0.406964,
+            "crossfit_pq_ci95": [
+              0.383525,
+              0.428979
+            ],
+            "holdout_pq": 0.413329,
+            "n_observations": 144
+          },
+          {
+            "label": "Tversky loss",
+            "file": "outputs/step3/totals_det12_u2tverskylast.npz",
+            "kind": "variant",
+            "crossfit_pq": 0.408758,
+            "crossfit_pq_ci95": [
+              0.385741,
+              0.430603
+            ],
+            "holdout_pq": 0.415374,
+            "n_observations": 144
+          }
+        ]
+      },
+      {
+        "group": "Single detectors, run-3 U-Net",
+        "members": [
+          {
+            "label": "Det 1: YOLO11s, 1024 px",
+            "file": "outputs/step3/totals_det1_v5last.npz",
+            "kind": "variant",
+            "crossfit_pq": 0.41094,
+            "crossfit_pq_ci95": [
+              0.387297,
+              0.43378
+            ],
+            "holdout_pq": 0.419187,
+            "n_observations": 144
+          },
+          {
+            "label": "Det 2: YOLO11m, 1280 px",
+            "file": "outputs/step3/totals_det2_v5last.npz",
+            "kind": "base",
+            "crossfit_pq": 0.414806,
+            "crossfit_pq_ci95": [
+              0.391392,
+              0.437716
+            ],
+            "holdout_pq": 0.420232,
+            "n_observations": 144
+          },
+          {
+            "label": "Det 5: det 2 recipe, seed 1",
+            "file": "outputs/step3/totals_det5L_v5last.npz",
+            "kind": "seed",
+            "crossfit_pq": 0.404426,
+            "crossfit_pq_ci95": [
+              0.379216,
+              0.428765
+            ],
+            "holdout_pq": 0.407229,
+            "n_observations": 144
+          },
+          {
+            "label": "Det 3: YOLO11s, 1280 px",
+            "file": "outputs/step3/totals_det3_v5last.npz",
+            "kind": "variant",
+            "crossfit_pq": 0.399382,
+            "crossfit_pq_ci95": [
+              0.376428,
+              0.420756
+            ],
+            "holdout_pq": 0.407643,
+            "n_observations": 144
+          },
+          {
+            "label": "Det 4: YOLO11m, 1536 px",
+            "file": "outputs/step3/totals_det4L_v5last.npz",
+            "kind": "variant",
+            "crossfit_pq": 0.409566,
+            "crossfit_pq_ci95": [
+              0.386404,
+              0.432084
+            ],
+            "holdout_pq": 0.419956,
+            "n_observations": 144
+          }
+        ]
+      },
+      {
+        "group": "Detector ensembles, run-3 U-Net",
+        "members": [
+          {
+            "label": "Det 1+2",
+            "file": "outputs/step3/totals_det12_v5last.npz",
+            "kind": "variant",
+            "crossfit_pq": 0.418259,
+            "crossfit_pq_ci95": [
+              0.395038,
+              0.440324
+            ],
+            "holdout_pq": 0.427843,
+            "n_observations": 144
+          },
+          {
+            "label": "Det 1+2+4 (V)",
+            "file": "outputs/step3/totals_det124L_v5last.npz",
+            "kind": "final",
+            "crossfit_pq": 0.421443,
+            "crossfit_pq_ci95": [
+              0.398507,
+              0.443266
+            ],
+            "holdout_pq": 0.433434,
+            "n_observations": 144
+          },
+          {
+            "label": "Det 1+2+3",
+            "file": "outputs/step3/totals_det123_v5last.npz",
+            "kind": "variant",
+            "crossfit_pq": 0.412478,
+            "crossfit_pq_ci95": [
+              0.389299,
+              0.434533
+            ],
+            "holdout_pq": 0.421321,
+            "n_observations": 144
+          },
+          {
+            "label": "Det 1+2+4+5",
+            "file": "outputs/step3/totals_det1245L_v5last.npz",
+            "kind": "variant",
+            "crossfit_pq": 0.418525,
+            "crossfit_pq_ci95": [
+              0.395349,
+              0.440685
+            ],
+            "holdout_pq": 0.43093,
+            "n_observations": 144
+          }
+        ]
+      }
+    ],
+    "baseline_unet_only": {
+      "file": "outputs/step3/totals_det12_v5last.npz",
+      "array": "baseline",
+      "pq": 0.370859,
+      "pq_ci95": [
+        0.34919,
+        0.392534
+      ],
+      "note": "U-Net alone, fixed setting thr 0.6, area 400, gap 24, close 3, open 0; not tuned per half"
+    },
+    "run3_det12": {
+      "wide_grid": 0.41716,
+      "usual_grid": 0.418259,
+      "note": "U-Net variants were tuned over a wider fusion grid, so run 3 with\ndetectors 1+2 reads 0.417 there and 0.418 in the Det 1+2 row."
+    },
+    "seed_pairs": [
+      {
+        "original": "Run 3 (used in both entries)",
+        "retrain": "Run 3 recipe, seed 1",
+        "original_pq": 0.41716,
+        "retrain_pq": 0.409875,
+        "delta": -0.007285
+      },
+      {
+        "original": "Det 2: YOLO11m, 1280 px",
+        "retrain": "Det 5: det 2 recipe, seed 1",
+        "original_pq": 0.414806,
+        "retrain_pq": 0.404426,
+        "delta": -0.010381
+      }
+    ],
+    "missing_files": []
+  },
+  "fig_progress": {
+    "file": "reports/figures/fig_progress.pdf",
+    "note": "public leaderboard, two decimals as the board shows them",
+    "submissions": [
+      {
+        "order": 1,
+        "label": "classical baseline",
+        "axis_label": "Classical baseline",
+        "public": 0.08
+      },
+      {
+        "order": 2,
+        "label": "U-Net 1 epoch",
+        "axis_label": "U-Net, 1 epoch",
+        "public": 0.22
+      },
+      {
+        "order": 3,
+        "label": "U-Net 30 epochs tuned",
+        "axis_label": "U-Net, 30 epochs, tuned",
+        "public": 0.3
+      },
+      {
+        "order": 4,
+        "label": "+ 8-way TTA",
+        "axis_label": "+ 8-way TTA",
+        "public": 0.32
+      },
+      {
+        "order": 5,
+        "label": "corrected limb + all-annotator selection",
+        "axis_label": "Limb fix, all annotators",
+        "public": 0.32
+      },
+      {
+        "order": 6,
+        "label": "detector fusion (det1)",
+        "axis_label": "Fusion, det 1",
+        "public": 0.36
+      },
+      {
+        "order": 7,
+        "label": "det2",
+        "axis_label": "Fusion, det 2",
+        "public": 0.36
+      },
+      {
+        "order": 8,
+        "label": "det1+det2",
+        "axis_label": "Fusion, det 1+2",
+        "public": 0.36
+      },
+      {
+        "order": 9,
+        "label": "last-epoch U-Net",
+        "axis_label": "Last-epoch U-Net",
+        "public": 0.37
+      },
+      {
+        "order": 10,
+        "label": "all-data (2 U-Nets, 3 detectors)",
+        "axis_label": "All data: 2 U-Nets, 3 det.",
+        "public": 0.37
+      },
+      {
+        "order": 11,
+        "label": "all-data (4 U-Nets, 6 detectors)",
+        "axis_label": "All data: 4 U-Nets, 6 det.",
+        "public": 0.37
+      },
+      {
+        "order": 12,
+        "label": "validated det1+2+4",
+        "axis_label": "V: validated det 1+2+4",
+        "public": 0.37
+      }
+    ],
+    "jumps": [
+      {
+        "name": "U-Net",
+        "from": "classical baseline",
+        "to": "U-Net 30 epochs tuned",
+        "from_score": 0.08,
+        "to_score": 0.3,
+        "delta": 0.22
+      },
+      {
+        "name": "TTA",
+        "from": "U-Net 30 epochs tuned",
+        "to": "+ 8-way TTA",
+        "from_score": 0.3,
+        "to_score": 0.32,
+        "delta": 0.02
+      },
+      {
+        "name": "Detector fusion",
+        "from": "corrected limb + all-annotator selection",
+        "to": "detector fusion (det1)",
+        "from_score": 0.32,
+        "to_score": 0.36,
+        "delta": 0.04
+      }
+    ]
+  }
+}

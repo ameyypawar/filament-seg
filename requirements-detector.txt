@@ -1,0 +1,5 @@
+# Detector environment: the YOLO11 detectors were trained and run on Kaggle by
+# kaggle/detector_pipeline.py (Ultralytics 8.4.171-8.4.173 across the runs).
+# Ultralytics depends on opencv-python, which clashes with the headless OpenCV
+# in requirements.txt, so it gets its own environment and its own file.
+ultralytics==8.4.173

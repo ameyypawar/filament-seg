@@ -19,8 +19,8 @@ pipelines on all 144 observations instead of 72.
 With ``--submission``, the setting that is best on all validation observations
 is applied to the test observations and written out as a submission CSV.
 
-    python scripts/fuse_detections.py --checkpoint outputs/kaggle_v5/model_best.pt \\
-        --cache-dir data/cache_v2 --logit-dir outputs/step3/logits_v5_dihedral \\
+    python scripts/fuse_detections.py --checkpoint outputs/kaggle_v5/model_best_last.pt \\
+        --logit-dir outputs/step3/logits_v5last_dihedral \\
         --detections-val outputs/kaggle_det1/detections_val.json \\
         --baseline threshold=0.6,min_area=400,bridge_gap=24,close_radius=3,open_radius=0
 """

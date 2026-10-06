@@ -1,0 +1,76 @@
+{
+  "limb": {
+    "frames": 887,
+    "threshold_radius_minus_limb_px": {
+      "n": 887,
+      "median": 39.448,
+      "p25": 30.761,
+      "p75": 54.829,
+      "max": 148.425
+    },
+    "largest_radial_gap_px": {
+      "n": 887,
+      "median": 59.093,
+      "p25": 43.896,
+      "p75": 88.661,
+      "max": 228.049
+    }
+  },
+  "days_to_nearest_training_observation": {
+    "validation": {
+      "n": 144,
+      "median": 2.057,
+      "p25": 1.048,
+      "p75": 3.859,
+      "max": 47.714
+    },
+    "test": {
+      "n": 180,
+      "median": 2.0,
+      "p25": 0.779,
+      "p75": 3.532,
+      "max": 56.167
+    }
+  },
+  "validated_entry_pq": {
+    "cross_fitted": 0.4214,
+    "reweighted_to_test_years": 0.4186,
+    "test_observations_in_years_without_validation": 0,
+    "reweighted_to_test_sites": 0.4217,
+    "test_observations_in_sites_without_validation": 0
+  },
+  "drawn_by_other_annotators": {
+    "below_score": {
+      "filament_views": 140,
+      "mean_share_of_other_annotators": 0.296
+    },
+    "dropped_small": {
+      "filament_views": 5,
+      "mean_share_of_other_annotators": 0.6
+    },
+    "low_overlap": {
+      "filament_views": 59,
+      "mean_share_of_other_annotators": 0.22
+    },
+    "matched": {
+      "filament_views": 717,
+      "mean_share_of_other_annotators": 0.719
+    },
+    "near_miss": {
+      "filament_views": 179,
+      "mean_share_of_other_annotators": 0.304
+    },
+    "no_detection": {
+      "filament_views": 37,
+      "mean_share_of_other_annotators": 0.0
+    },
+    "poor_detection": {
+      "filament_views": 72,
+      "mean_share_of_other_annotators": 0.118
+    }
+  },
+  "near_miss_pixels": {
+    "near_missed_filament_views": 246,
+    "mean_share_of_missing_pixels_below_0.3": 0.857
+  }
+}

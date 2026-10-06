@@ -96,7 +96,11 @@ def labels_to_rles(labels: np.ndarray) -> list[Rle]:
 def rle_areas(rles: Sequence[Rle]) -> np.ndarray:
     if not rles:
         return np.zeros(0, dtype=np.float64)
-    return np.asarray(mask_utils.area(list(rles)), dtype=np.float64)
+    rles = list(rles)
+    # Under NumPy 2, pycocotools' area() overflows a uint8 counter past 255
+    # masks in one call, so the masks are measured in chunks of at most 255.
+    return np.concatenate([np.asarray(mask_utils.area(rles[i : i + 255]), dtype=np.float64)
+                           for i in range(0, len(rles), 255)])
 
 
 def rle_intersection_area(a: Rle, b: Rle) -> float:

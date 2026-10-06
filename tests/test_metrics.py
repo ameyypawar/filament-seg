@@ -18,6 +18,7 @@ from filament_seg.rle import (
     iou_matrix,
     mask_to_rle,
     read_submission,
+    rle_areas,
     rle_to_mask,
     validate_counts,
     write_submission,
@@ -190,3 +191,11 @@ def test_predictions_for_unknown_images_are_false_positives():
     summary, _ = evaluate(gt, pred)
     assert summary["fp"] == 1
     assert summary["pq_pooled"] == pytest.approx(1.0 / 1.5)
+
+
+def test_areas_of_more_than_255_masks():
+    # pycocotools' area() overflows past 255 masks in one call under NumPy 2.
+    mask = np.zeros((64, 64), dtype=np.uint8)
+    mask[5:9, 5:12] = 1
+    areas = rle_areas([mask_to_rle(mask)] * 300)
+    assert areas.shape == (300,) and (areas == 28).all()

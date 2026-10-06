@@ -11,12 +11,13 @@ assignment by descending IoU is optimal.
 
 Two design notes:
 
-* **Aggregation is ambiguous.** The competition states the formula over sets but
-  does not say whether TP/FP/FN are pooled across the whole test set or whether
-  per-image PQ is averaged. Both are computed here (``pooled`` and
-  ``per_image``); calibrate which one matches by comparing a submission's local
-  score against the public leaderboard. Treat this as an open question until
-  confirmed -- it materially changes how much small images matter.
+* **Aggregation is pooled.** The organisers' self-evaluation notebook
+  (kaggle.com/code/azimahmadzadeh/self-evaluation-notebook) matches the
+  predictions against every annotator's view of an observation separately and
+  pools TP, FP, FN and the matched IoUs over all views of all observations;
+  ``filament_seg.scoring`` keeps those totals per observation. ``summarize``
+  reports the pooled score (``pq_pooled``) and, for diagnostics only, the mean
+  per-image PQ (``pq_per_image_mean``).
 
 * **The rubric wants more than PQ.** 70% of the final score is quantitative and
   explicitly includes the *distributions* of Dice and IoU plus the counts of
