@@ -51,9 +51,10 @@ BATCH_SIZE = 16
 #: seeds is as large as any of those changes. So the recipe stays, and this
 #: run trains it on every labelled observation, twice, as candidates for the
 #: final entry; validation observations are in training, so nothing is scored.
+#: Seeds 0 and 1 ran first (kernel v8); seeds 2 and 3 make a four-model ensemble.
 VARIANTS = [
-    ("alldata_s0", ["--all-data"]),
-    ("alldata_s1", ["--all-data", "--seed", "1"]),
+    ("alldata_s2", ["--all-data", "--seed", "2"]),
+    ("alldata_s3", ["--all-data", "--seed", "3"]),
 ]
 #: Stop after training; see the module docstring.
 EXPLORE = True
