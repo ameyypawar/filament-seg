@@ -1,245 +1,210 @@
-# Solar Filament Segmentation Challenge 2026
+# Solar filament segmentation (IEEE BigData 2026 Cup)
 
-Entry for the [IEEE Big Data Cup 2026 filament segmentation
-challenge](https://www.kaggle.com/competitions/filament-segmentation-2026):
-pixel-precise segmentation of individual solar filaments in full-disk GONG
-H-alpha observations.
+My entry for the [Solar Filament Segmentation Challenge 2026](https://www.kaggle.com/competitions/filament-segmentation-2026)
+on Kaggle, part of the IEEE BigData 2026 Cup. Each image is a 2048x2048
+full-disk H-alpha observation from the GONG network, and the task is to return
+one mask per solar filament. Submissions are scored with Panoptic Quality (PQ),
+where a predicted mask only counts if it overlaps an annotated filament with
+IoU above 0.5.
 
-## The task in one page
+A U-Net marks which pixels are filament, and YOLO11-seg detectors decide which
+of those pixels belong to the same filament. The 4-page report is
+[`reports/main.pdf`](reports/main.pdf).
 
-| | |
-|---|---|
-| Input | 2048x2048 grayscale H-alpha JPEG (converted from FITS) |
-| Output | one RLE mask per predicted filament instance |
-| Leaderboard metric | Panoptic Quality (instance-level, IoU > 0.5 matching) |
-| Final judging | 70% quantitative + 30% qualitative (pipeline, morphology, code quality) |
-| Deadline | Nov 15, 2026 (report + public repo via Google form) |
+## Results
 
-**Panoptic Quality**, as defined by the organisers:
+| Pipeline | Validation PQ | Public leaderboard |
+|---|---|---|
+| U-Net alone | 0.371 | |
+| Detectors alone | 0.383 | |
+| U-Net + detectors 1 and 2 | 0.418 | 0.37 |
+| U-Net + detectors 1, 2 and 4 (validated entry) | 0.421 | 0.37 |
+| Same recipes retrained on all labelled data (all-data entry) | | 0.37 |
 
+Validation PQ is measured on the 144 validation observations the way the
+organisers score the test set: every annotator's drawing is scored separately
+and the counts are pooled. It is also cross-fitted. The observations are split
+into two halves, and each half is scored with the post-processing settings
+tuned on the other half. The all-data entry has no validation score because the
+validation observations are part of its training data.
+
+On the public leaderboard the scores went 0.08 (threshold baseline), 0.30
+(first tuned U-Net), 0.32 (test-time augmentation), 0.36 (detector fusion) and
+0.37 (last-epoch U-Net). The board shows two decimals and uses part of the test
+set.
+
+## How it works
+
+GONG frames have a bright halo outside the limb, so a thresholded disk comes
+out too big, by 39 px on median and up to 148 px. `filament_seg/disk.py` fits
+the limb to the sharpest radial edge instead, then divides out limb darkening.
+The networks get two channels: the corrected intensity, and the distance from
+the disk centre in units of the solar radius.
+
+The U-Net has a ResNet34 encoder with ImageNet weights
+(segmentation_models_pytorch) and trains on 512 px crops at full resolution,
+with Dice plus binary cross-entropy, for 30 epochs. Filaments are only a few
+pixels wide, so nothing is downsampled: inference runs over overlapping tiles
+blended with a Hann window and averages the 8 flips and rotations of the image.
+The submissions use the last epoch. The epoch with the best per-epoch
+validation score did worse out of sample (0.411 against 0.418 with detectors 1
+and 2).
+
+The detectors are YOLO11-seg models (Ultralytics) trained on the same corrected
+images as a single class, with every annotator's drawing as its own sample.
+Their masks are too coarse to submit, but they know which pixels go together
+and how sure they are. The entries use YOLO11s at 1024 px, YOLO11m at 1280 px
+and YOLO11m at 1536 px. When detectors find the same filament (mask IoU above
+0.5), the most confident mask is kept and its score is the average over all
+detectors, with 0 for a detector that missed it.
+
+Fusion puts the two together. The U-Net probability is thresholded at 0.5,
+closed with a 3 px disk, hole-filled and clipped to the solar disk. Then each
+detection scoring 0.30 or more, most confident first, claims the unclaimed
+U-Net pixels inside its own mask grown by 4 px. Claims under 200 px are
+dropped, and so are pixels that no detection claims. Instances never overlap.
+
+There are two final entries. The validated entry is the U-Net and the three
+detectors above, trained on the 563 training observations. The all-data entry
+retrains the same recipes on all 707 labelled observations (four U-Net seeds
+averaged, two seeds of each detector) and keeps the validated entry's fusion
+settings. It can't be validated, so it was submitted once as a sanity check.
+
+## Setup
+
+```bash
+uv venv --python 3.11 .venv
+source .venv/bin/activate
+uv pip install -r requirements.txt
+uv pip install -r requirements-detector.txt   # only needed for the detectors
 ```
-PQ = sum(IoU over matched pairs) / (|TP| + 0.5|FP| + 0.5|FN|)
+
+The scripts add the repo root to `sys.path`, so they run from a fresh clone
+without installing anything else.
+
+Downloading the data needs a Kaggle account that has accepted the competition
+rules, and an API token in `~/.kaggle/kaggle.json` (`chmod 600`).
+
+```bash
+./scripts/download_data.sh   # ~751 MB, unpacks to data/MAGFiLO_1.0_Kaggle_2026/
+pytest -q                    # tests that need no data
 ```
 
-Three consequences drive every design decision in this repo:
+## Reproducing the final entries
 
-1. **Instances, not pixels.** A mask that is 49% right scores exactly the same
-   as no mask at all. Getting the *count* and *grouping* of filaments right
-   beats polishing boundaries.
-2. **Fragmentation is punished three times.** Splitting one filament into three
-   blobs costs one FN plus up to three FP. The organisers name this as the
-   hardest of the three challenges.
-3. **A near-miss costs twice a silent miss.** Failing to predict a filament adds
-   0.5 to the denominator; predicting it and landing below IoU 0.5 adds 1.0.
-   Only emit an instance when its chance of clearing the threshold is above
-   roughly 30%. Aggressive small-instance filtering is free score.
+[`notebooks/reproduce.ipynb`](notebooks/reproduce.ipynb) rebuilds both final
+submissions from the trained weights, compares them with the files that were
+submitted, and re-scores the validated entry on the validation set. The weights
+are the public Kaggle dataset
+[filament-seg-weights](https://www.kaggle.com/datasets/ameypawar123456789/filament-seg-weights),
+and the notebook is also on Kaggle as
+[filament-seg-reproduce](https://www.kaggle.com/code/ameypawar123456789/filament-seg-reproduce).
 
-The leaderboard is *not* the final ranking: it is one input to a rubric that also
-weighs the IoU/Dice distributions, the fragmentation counts, the written
-pipeline description, how the masks look, and the quality of this repository.
+On Kaggle, attach the competition data and the weights dataset, turn on a GPU
+and internet, and run all cells. It takes about 70 minutes on two T4s. To run
+it locally, download the dataset and set `FILAMENT_WEIGHTS` to its folder.
+
+A run on Kaggle matched every instance in both submitted files. A few pixels
+differ (agreement PQ 0.99994 and 0.999997) because the submitted U-Net logits
+were computed on a different GPU, and the cross-fitted validation PQ came out
+at 0.4214, the same as in the report. The models aren't retrained there; the
+notebook lists the command, commit and Kaggle session time behind each
+checkpoint.
+
+## Running the pipeline
+
+The models were trained on Kaggle T4s by `kaggle/train_on_kaggle.py` (U-Net)
+and `kaggle/detector/run.py` (detectors), which call these scripts.
+
+```bash
+python scripts/preprocess.py                    # limb fit and correction, cached in data/cache
+python scripts/make_splits.py --group-by date   # 563 training / 144 validation observations
+
+# U-Net; the last epoch is also saved, as outputs/model_best_last.pt
+python scripts/train.py --epochs 30 --batch-size 16
+
+# a detector, then its predictions on the validation images (and --subset test)
+python scripts/export_yolo.py --out data/yolo
+python scripts/train_detector.py --data data/yolo/data.yaml --out outputs/det2 \
+    --model yolo11m-seg.pt --imgsz 1280 --epochs 80
+python scripts/yolo_predict.py --weights outputs/det2/detector_last.pt --subset val \
+    --imgsz 1280 --out outputs/det2_val.json
+python scripts/merge_detections.py --out outputs/dets_val.json outputs/det1_val.json outputs/det2_val.json
+
+# fusion: tuned and cross-fitted on validation, then applied to the test images
+python scripts/fuse_detections.py --checkpoint outputs/model_best_last.pt \
+    --logit-dir outputs/logits --detections-val outputs/dets_val.json \
+    --detections-test outputs/dets_test.json \
+    --baseline threshold=0.6,min_area=400,bridge_gap=24,close_radius=3,open_radius=0 \
+    --save-totals outputs/totals.npz --submission outputs/submission.csv
+
+# paired bootstrap between two pipelines, observation by observation
+python scripts/compare_runs.py outputs/totals.npz outputs/totals_other.npz
+```
 
 ## Layout
 
 ```
 filament_seg/
-  config.py       paths and dataset constants
-  rle.py          mask <-> COCO RLE <-> submission CSV
-  metrics.py      local Panoptic Quality + the rubric's diagnostics
-  data.py         MAGFiLO annotations, leak-free train/val splits
-  disk.py         solar disk detection, limb-darkening correction
-  postprocess.py  binary mask -> filament instances
-  baseline.py     model-free detector (validates the pipeline end to end)
-scripts/          runnable entry points, one per step
-tests/            self-contained checks that need no data
-notebooks/        the reproduction notebook required for submission
-reports/          the 4-page technical report
+  config.py        paths and constants (FILAMENT_DATA_ROOT and FILAMENT_OUTPUT_ROOT override them)
+  data.py          MAGFiLO annotations, train/validation split by date
+  disk.py          limb fit and limb-darkening correction
+  dataset.py       training crops for the U-Net
+  model.py         U-Net, loss, tiled inference with test-time augmentation
+  logit_cache.py   cached full-resolution logits, recorded with the model that made them
+  fusion.py        merging detections, and detector-guided instance formation
+  postprocess.py   U-Net-only instances, the baseline that fusion is compared with
+  metrics.py       PQ as the organisers compute it, plus IoU/Dice and fragmentation counts
+  scoring.py       pooled PQ totals and the paired bootstrap
+  rle.py           masks, COCO RLE and the submission CSV
+  baseline.py      model-free threshold detector, the first submission
+scripts/           one script per step
+kaggle/            the Kaggle kernels that trained the U-Nets and the detectors
+notebooks/         reproduce.ipynb
+reports/           the report, and the scripts that make its figures and numbers
+tests/             pytest, no data needed
 ```
 
-## Setup
+## About the data
 
-```bash
-uv venv --python 3.11 .venv        # PyTorch has no 3.14 wheels yet
-source .venv/bin/activate
-uv pip install -r requirements.txt
-```
+The training set has 707 observations from 2011 to 2022 and six GONG sites,
+with 1,154 annotator drawings and 8,199 filaments. The test set has 180 images.
+Filaments are small: the median one covers 1,228 px, about 0.03% of the image,
+and 41% are under 1,000 px.
 
-That is enough to run everything: the scripts put the repo root on `sys.path`
-themselves, so a fresh clone works with no install step. `uv pip install -e .`
-also works if you prefer importing `filament_seg` from elsewhere.
+Many observations were drawn by two or three annotators, and each drawing has
+its own image id with the same file name. Splitting by image id would put the
+same pixels in training and validation, so `make_splits.py` splits by
+observation date.
 
-Then get the data. This needs two one-time manual steps from you: accept the
-competition rules on Kaggle, and create an API token
-(Kaggle -> Settings -> API -> Create New API Token -> save to
-`~/.kaggle/kaggle.json`, `chmod 600`).
+Annotators often disagree. Scored against each other, two annotators of the
+same observation reach a PQ of 0.343 on average (over the 296 observations with
+more than one annotator).
 
-```bash
-./scripts/download_data.sh
-```
+`pycocotools` encodes masks column-major. A C-ordered mask encodes and decodes
+without any error but comes back transposed and scores close to zero.
+`rle.mask_to_rle` handles this, and a test with an asymmetric mask checks it.
 
-The archive is ~751 MB and unpacks to `data/MAGFiLO_1.0_Kaggle_2026/`.
+## Scoring
 
-## Workflow
+The organisers' self-evaluation notebook matches the predictions against each
+annotator's drawing separately (IoU above 0.5) and pools TP, FP and FN over all
+drawings of all observations. `filament_seg/metrics.py` and
+`filament_seg/scoring.py` do the same, and every validation number here is
+computed that way.
 
-```bash
-pytest -q                                    # metric + RLE checks, no data needed
-python scripts/audit_data.py                 # what is actually in the dataset
-python scripts/make_splits.py --group-by date
-python scripts/annotator_agreement.py        # the human ceiling on PQ
+PQ punishes a wrong prediction more than a missing one. A filament that nobody
+predicts adds 0.5 to the denominator, while a prediction below IoU 0.5 adds
+1.0 (one false positive and one false negative). That is why fusion drops small
+claims and low-confidence detections.
 
-# Phase 1: prove the pipeline with a model-free detector
-python scripts/run_baseline.py --subset val --out outputs/val_baseline.csv
-python scripts/evaluate.py --submission outputs/val_baseline.csv --subset val
-python scripts/run_baseline.py --subset test --out outputs/submission_baseline.csv
-```
+The 180 test images and their labels are in the public MAGFiLO 1.0 release, and
+a public notebook writes out a precomputed submission, so the top of the public
+leaderboard isn't comparable with models trained only on the training data.
+This project never uses that release.
 
-Upload `outputs/submission_baseline.csv` to Kaggle. Compare the public score
-against the local `pq_pooled` and `pq_per_image_mean` -- whichever matches tells
-you how the organisers aggregate, which is not stated anywhere and materially
-affects how you tune.
+## Licence
 
-## Reproducing the final entries
-
-`notebooks/reproduce.ipynb` rebuilds both final submissions from the trained
-weights, compares them with the files that were submitted, and re-scores the
-validated entry on the validation set. The weights are the public Kaggle
-dataset
-[filament-seg-weights](https://www.kaggle.com/datasets/ameypawar123456789/filament-seg-weights)
-(CC BY-NC 4.0). On Kaggle, attach the competition data and that dataset, turn
-on a GPU (two T4s) and internet, and run all cells: about 70 minutes. Locally,
-download the dataset and point `FILAMENT_WEIGHTS` at it. A run on Kaggle
-matched every submitted instance (agreement PQ 0.99994 and 0.999997) and the
-reported cross-fitted validation PQ of 0.4214. The notebook's last section
-lists the command, commit and Kaggle session time behind every checkpoint.
-
-## Two traps in the data
-
-**Multiple annotators per observation.** The same image appears under several
-`image["id"]` values that differ only in the batch prefix (`010101-2016...` vs
-`010102-2016...`) but share a `file_name`. Splitting on image id puts identical
-pixels in both train and validation. `data.make_split` groups by observation
-date by default; `--group-by month` is stricter, since filaments persist for
-days to weeks and same-week observations are near-duplicates.
-
-**Fortran ordering.** `pycocotools` encodes column-major. Passing a C-ordered
-array produces a transposed mask that encodes and decodes cleanly and scores
-near zero. `rle.mask_to_rle` handles this; `tests/test_metrics.py` guards it
-with a deliberately asymmetric mask.
-
-## What the data actually says
-
-Measured with the scripts above, not assumed.
-
-| | |
-|---|---|
-| Observations / annotated views | 707 / 1154 (411 with one annotator, 145 with two, 151 with three) |
-| Filaments | 8,199 — mean 7.1 per view, max 26, none empty |
-| Coverage | 2011-01-09 to 2022-08-03, 656 distinct days, 6 GONG sites, evenly spread |
-| Test set | 180 images |
-| Median filament area | 1,228 px — about 0.03% of a 2048x2048 frame |
-| Filaments under 1,000 px | 41% |
-
-**Filaments are tiny and thin.** A median filament is roughly 0.03% of the
-image. For a structure a handful of pixels wide, clearing IoU 0.5 means being
-right to within a pixel or two along each edge. This is the single fact that
-explains every score in this competition.
-
-**Inter-annotator PQ is 0.343** (mean over the 296 observations annotated by
-more than one person; median 0.345, range 0.00 to 0.75). Two experts shown the
-same Sun agree with each other at PQ 0.34. The organisers' remark that "any PQ
-score of greater than 0.35 is of great value to us" lands exactly on that
-number, which is unlikely to be a coincidence.
-
-Careful with what this does and does not imply. It is **not** a hard ceiling on
-a model's score: a model that learns the *consensus* annotation will score
-higher against any single annotator than a second annotator does, because it
-regresses toward the middle of the label distribution. That is the honest reason
-the leaderboard's main cluster sits at 0.38-0.40, above human pairwise
-agreement, and it is why consensus targets are Phase 4 work rather than a
-curiosity. What it does mean is that beyond roughly 0.40 the remaining signal is
-substantially annotator preference, and effort is better spent on the 30%
-qualitative half of the rubric than on chasing decimals.
-
-### Baseline results
-
-The model-free detector, tuned by `scripts/sweep_baseline.py` over 40 validation
-images (`k=2.0`, `min_area=400`):
-
-| | PQ | SQ | RQ | TP | FP | FN |
-|---|---|---|---|---|---|---|
-| default `k=1.6` | 0.097 | 0.634 | 0.154 | 316 | 2655 | 826 |
-| tuned `k=2.0` | 0.129 | 0.645 | 0.200 | — | — | — |
-
-The split between SQ and RQ is the whole story. **SQ sits at ~0.65 no matter
-what you tune** — when the detector does match a filament, the mask is
-reasonable. **RQ never exceeds 0.20** — it almost never matches at all. Across
-the entire sweep, from 22% to 289% of the true filament count predicted, at best
-79 of 263 ground-truth filaments were ever recovered.
-
-So intensity thresholding cannot delineate these structures precisely enough to
-clear IoU 0.5, and no amount of threshold tuning fixes it. That is the expected
-answer, and it is now measured rather than assumed. The baseline has done its
-job: the RLE encoding, CSV format, splits and evaluator are all proven end to
-end, and there is a real floor to beat.
-
-### Local vs leaderboard calibration
-
-The tuned baseline scores **0.08 on the public leaderboard** against **0.1245
-local pooled / 0.1093 local per-image** on the full validation split. Chasing
-that gap:
-
-* **Not annotator choice.** Scoring against every annotator instead of one per
-  observation moves PQ from 0.1245 to 0.1231. Ruled out.
-* **Not distribution shift.** Train and test match closely on observatory
-  (within 4 points on every site) and on year. Predicted instances per image are
-  1638/144 = 11.38 on validation against 2052/180 = 11.40 on test.
-* **Not tuning overfit.** `k=2.0` was chosen on a 40-image subsample scoring
-  0.129; the full 144-image validation split gives 0.1245. Barely optimistic.
-* **Partly sampling noise.** The public leaderboard uses roughly half the 180
-  test images. Per-image PQ has std 0.097, so a 90-image slice has a standard
-  error of about 0.010, putting 0.08 some 2.4 to 2.9 standard errors below the
-  local mean. Real, but not the whole story either.
-
-Working rule until a second submission says otherwise: **treat local per-image
-PQ as optimistic by roughly 25%**. What matters is not the absolute offset but
-whether local gains track leaderboard gains, which the next submission tests.
-
-## Plan
-
-- **Phase 1 — plumbing.** Local PQ evaluator, leak-free splits, model-free
-  baseline, a real submission on the leaderboard. *(done)*
-- **Phase 2 — preprocessing.** Disk masking and limb-darkening correction, both
-  already in `disk.py`; then decide resolution (1024 full-disk for context vs
-  512 overlapping tiles for barbs).
-- **Phase 3 — U-Net + instance post-processing.** Pretrained encoder, Dice+BCE
-  leaning toward recall on thin structures, then connected components. Tune
-  `PostprocessParams` against local PQ, never against Dice.
-- **Phase 4 — improvements, in expected-value order.** Multi-annotator consensus
-  targets, test-time augmentation, a high-resolution refinement pass for barbs,
-  and only then a true instance model if fragmentation still dominates.
-- **Phase 5 — report and repo.** 4-page Overleaf report, pinned
-  `requirements.txt`, one notebook reproducing the pipeline, Google form.
-  Worth 30% of the score; start it in early November, not the last week.
-
-## How the leaderboard scores
-
-The organisers' self-evaluation notebook
-(`kaggle.com/code/azimahmadzadeh/self-evaluation-notebook`) settles the
-questions this section used to list as open:
-
-- **Every annotator counts.** Each observation's predictions are matched
-  against every annotator's view of it separately (IoU > 0.5), and TP, FP and
-  FN are **pooled** over all views of all observations. There is no consensus
-  ground truth and no per-image averaging. `scripts/evaluate.py`,
-  `scripts/sweep_postprocess.py`, `scripts/compare_holdout.py` and training's
-  checkpoint selection all score this way.
-- **The 0.55 cluster is not a modelling result.** A public notebook embeds a
-  precomputed submission file and writes it out unchanged; dozens of teams
-  submitted it. All 180 test images are also in the public MAGFiLO 1.0 release
-  with their annotations, so leaderboard scores near the top are not
-  comparable to honest ones. This project never uses that release; the
-  organisers judge on more than the leaderboard.
-
-## Data licence
-
-MAGFiLO is CC BY-NC 4.0. The data is not redistributed here (`data/` is
-gitignored). GONG data is obtained by the NSO Integrated Synoptic Program.
+MAGFiLO is CC BY-NC 4.0. The data isn't redistributed here (`data/` is
+gitignored). GONG data is obtained by the NSO Integrated Synoptic Program. The
+trained weights on Kaggle are CC BY-NC 4.0 as well.
