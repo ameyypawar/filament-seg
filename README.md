@@ -97,6 +97,20 @@ against the local `pq_pooled` and `pq_per_image_mean` -- whichever matches tells
 you how the organisers aggregate, which is not stated anywhere and materially
 affects how you tune.
 
+## Reproducing the final entries
+
+`notebooks/reproduce.ipynb` rebuilds both final submissions from the trained
+weights, compares them with the files that were submitted, and re-scores the
+validated entry on the validation set. The weights are the public Kaggle
+dataset
+[filament-seg-weights](https://www.kaggle.com/datasets/ameypawar123456789/filament-seg-weights)
+(CC BY-NC 4.0). On Kaggle, attach the competition data and that dataset, turn
+on a GPU (two T4s) and internet, and run all cells: about 70 minutes. Locally,
+download the dataset and point `FILAMENT_WEIGHTS` at it. A run on Kaggle
+matched every submitted instance (agreement PQ 0.99994 and 0.999997) and the
+reported cross-fitted validation PQ of 0.4214. The notebook's last section
+lists the command, commit and Kaggle session time behind every checkpoint.
+
 ## Two traps in the data
 
 **Multiple annotators per observation.** The same image appears under several
