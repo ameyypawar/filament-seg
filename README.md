@@ -205,6 +205,7 @@ This project never uses that release.
 
 ## Licence
 
-MAGFiLO is CC BY-NC 4.0. The data isn't redistributed here (`data/` is
+The code is under the MIT licence (`LICENSE`). `reports/preamble.tex` comes
+from the organisers' report template. MAGFiLO is CC BY-NC 4.0. The data isn't redistributed here (`data/` is
 gitignored). GONG data is obtained by the NSO Integrated Synoptic Program. The
 trained weights on Kaggle are CC BY-NC 4.0 as well.
